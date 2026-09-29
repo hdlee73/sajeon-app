@@ -74,6 +74,16 @@ class MainActivity : Activity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 16.dp(), 20.dp(), 12.dp()); setBackgroundColor(0xfff3f6fb.toInt()) }
         setContentView(root)
+        // Android 15+ draws edge-to-edge for apps targeting API 35. Keep the app
+        // content below the status bar and above the navigation/gesture area.
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            @Suppress("DEPRECATION")
+            val topInset = insets.systemWindowInsetTop
+            @Suppress("DEPRECATION")
+            val bottomInset = insets.systemWindowInsetBottom
+            view.setPadding(20.dp(), 16.dp() + topInset, 20.dp(), 12.dp() + bottomInset)
+            insets
+        }
         val hero = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 18.dp(), 20.dp(), 18.dp()); background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR, intArrayOf(0xff142949.toInt(), 0xff294c79.toInt())).apply { cornerRadius = 22.dp().toFloat() } }
         hero.addView(label("LEXI  ·  단어장", 25, true, 0xffffffff.toInt()))
         hero.addView(label("영어 표현을 찾고, 듣고, 내 단어로 저장하세요", 14, false, 0xffdce8f6.toInt()).apply { setPadding(0, 5.dp(), 0, 0) })
@@ -119,7 +129,8 @@ class MainActivity : Activity() {
                 val suggestions = try { fetchSuggestions(q) } catch (_: Exception) { emptyList() }
                 runOnUiThread {
                     showSaved = false
-                    status.text = if (suggestions.isEmpty()) "검색 서버가 응답하지 않습니다. 잠시 후 다시 시도해 주세요." else "‘$q’ 검색에 실패했습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
+                    status.text = if (suggestions.isNotEmpty()) "‘$q’ 검색 결과가 없습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
+                        else lookupErrorMessage(e)
                     resultBox.removeAllViews()
                     if (suggestions.isNotEmpty()) showSuggestions(suggestions)
                 }
@@ -156,7 +167,27 @@ class MainActivity : Activity() {
         return try {
             fetchFreeDictionary(q)
         } catch (primaryError: Exception) {
-            try { fetchDatamuseDictionary(q) } catch (_: Exception) { throw primaryError }
+            try { fetchDatamuseDictionary(q) } catch (fallbackError: Exception) {
+                throw IllegalStateException(
+                    "Free Dictionary: ${primaryError.message ?: primaryError.javaClass.simpleName}; " +
+                        "Datamuse: ${fallbackError.message ?: fallbackError.javaClass.simpleName}",
+                    primaryError
+                )
+            }
+        }
+    }
+
+    private fun lookupErrorMessage(error: Exception): String {
+        val details = generateSequence<Throwable>(error) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+            .lowercase(Locale.ROOT)
+        return when {
+            "unknownhost" in details || "unable to resolve host" in details -> "인터넷 주소에 연결하지 못했습니다. 모바일 데이터나 Wi‑Fi 연결을 확인해 주세요."
+            "timeout" in details || "timed out" in details -> "사전 서버 응답이 늦습니다. 잠시 후 다시 검색해 주세요."
+            "http 404" in details || "not found" in details -> "단어를 찾지 못했습니다. 철자를 확인하거나 다른 표현으로 검색해 주세요."
+            "ssl" in details || "certificate" in details -> "보안 연결에 실패했습니다. 기기의 날짜·시간과 네트워크 설정을 확인해 주세요."
+            else -> "검색에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요. (${error.message?.take(100) ?: "연결 오류"})"
         }
     }
 

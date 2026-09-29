@@ -20,7 +20,7 @@ Open this project in Android Studio or run:
 gradle :app:assembleDebug
 ```
 
-The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds the debug APK on pushes to `main`; pushing a tag such as `v1.0.0` also creates a GitHub Release with the APK attached.
+The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds the debug APK on pushes to `main`; pushing a tag such as `v1.0.0` also creates a GitHub Release with the APK attached. A main-branch commit whose message includes `[release]` publishes the version in `app/build.gradle.kts`.
 
 ## Notes
 
