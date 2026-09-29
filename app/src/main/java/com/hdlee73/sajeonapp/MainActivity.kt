@@ -69,7 +69,7 @@ class MainActivity : Activity() {
         root.addView(label("단어장", 28, true, dark))
         root.addView(label("영어 단어 · 숙어 · 구동사를 찾아 저장하세요", 14, false, 0xff5d6877.toInt()).apply { setPadding(0, 0, 0, 14.dp()) })
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val input = EditText(this).apply { hint = "예: break the ice"; singleLine = true; textSize = 16f; setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp()); background = rounded(0xffffffff.toInt(), 12) }
+        val input = EditText(this).apply { hint = "예: break the ice"; setSingleLine(true); textSize = 16f; setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp()); background = rounded(0xffffffff.toInt(), 12) }
         row.addView(input, LinearLayout.LayoutParams(0, 52.dp(), 1f))
         val search = button("검색").apply { setOnClickListener { val q = input.text.toString().trim(); if (q.isNotEmpty()) lookup(q) else toast("검색어를 입력해 주세요") } }
         row.addView(search, LinearLayout.LayoutParams(82.dp(), 52.dp()).apply { leftMargin = 8.dp() })
@@ -81,7 +81,7 @@ class MainActivity : Activity() {
         root.addView(tabs)
         status = label("검색 결과가 여기에 표시됩니다.", 14, false, 0xff5d6877.toInt())
         root.addView(status)
-        val scroll = ScrollView(this).apply { fillViewport = true }
+        val scroll = ScrollView(this).apply { setFillViewport(true) }
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         resultBox = content
         savedBox = content
