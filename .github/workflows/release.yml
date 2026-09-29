@@ -53,8 +53,10 @@ jobs:
               RELEASE_VERSION="v$APP_VERSION"
             fi
           fi
+          APK_NAME="sajeonapp-$RELEASE_VERSION.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "$APK_NAME"
           if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
-            echo "Release $RELEASE_VERSION already exists; skipping duplicate publication."
+            gh release upload "$RELEASE_VERSION" "$APK_NAME" --clobber
           else
-            gh release create "$RELEASE_VERSION" app/build/outputs/apk/debug/app-debug.apk --title "사전앱 $RELEASE_VERSION" --generate-notes --target "$GITHUB_SHA"
+            gh release create "$RELEASE_VERSION" "$APK_NAME" --title "사전앱 $RELEASE_VERSION" --generate-notes --target "$GITHUB_SHA"
           fi
