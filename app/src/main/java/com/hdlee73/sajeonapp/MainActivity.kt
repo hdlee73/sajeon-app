@@ -97,7 +97,25 @@ class MainActivity : Activity() {
             ttsReady = result == TextToSpeech.SUCCESS
             if (ttsReady) tts?.language = Locale.US
         }
-        renderSaved()
+        handleIncomingSearch(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingSearch(intent)
+    }
+
+    private fun handleIncomingSearch(intent: Intent?) {
+        val query = intent?.getStringExtra("query")?.trim().orEmpty()
+        if (query.isNotEmpty()) {
+            showSaved = false
+            searchInput.setText(query)
+            searchInput.setSelection(query.length)
+            lookup(query)
+        } else {
+            renderSaved()
+        }
     }
 
     private fun buildUi() {
