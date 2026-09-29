@@ -9,9 +9,11 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -19,6 +21,7 @@ import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -48,9 +51,10 @@ class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
     private lateinit var db: EntryDb
     private lateinit var resultBox: LinearLayout
-    private lateinit var savedBox: LinearLayout
     private lateinit var status: TextView
-    private lateinit var saveButton: Button
+    private lateinit var searchInput: EditText
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
     private var current: WordEntry? = null
     private var showSaved = false
     private val blue = 0xff245bd6.toInt()
@@ -60,33 +64,45 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         db = EntryDb(this)
         buildUi()
+        tts = TextToSpeech(this) { result ->
+            ttsReady = result == TextToSpeech.SUCCESS
+            if (ttsReady) tts?.language = Locale.US
+        }
         renderSaved()
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(22.dp(), 18.dp(), 22.dp(), 12.dp()); setBackgroundColor(0xfff6f8fc.toInt()) }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 16.dp(), 20.dp(), 12.dp()); setBackgroundColor(0xfff3f6fb.toInt()) }
         setContentView(root)
-        root.addView(label("단어장", 28, true, dark))
-        root.addView(label("영어 단어 · 숙어 · 구동사를 찾아 저장하세요", 14, false, 0xff5d6877.toInt()).apply { setPadding(0, 0, 0, 14.dp()) })
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val input = EditText(this).apply { hint = "예: break the ice"; setSingleLine(true); textSize = 16f; setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp()); background = rounded(0xffffffff.toInt(), 12) }
-        row.addView(input, LinearLayout.LayoutParams(0, 52.dp(), 1f))
-        val search = button("검색").apply { setOnClickListener { val q = input.text.toString().trim(); if (q.isNotEmpty()) lookup(q) else toast("검색어를 입력해 주세요") } }
-        row.addView(search, LinearLayout.LayoutParams(82.dp(), 52.dp()).apply { leftMargin = 8.dp() })
-        root.addView(row)
+        val hero = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 18.dp(), 20.dp(), 18.dp()); background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR, intArrayOf(0xff142949.toInt(), 0xff294c79.toInt())).apply { cornerRadius = 22.dp().toFloat() } }
+        hero.addView(label("LEXI  ·  단어장", 25, true, 0xffffffff.toInt()))
+        hero.addView(label("영어 표현을 찾고, 듣고, 내 단어로 저장하세요", 14, false, 0xffdce8f6.toInt()).apply { setPadding(0, 5.dp(), 0, 0) })
+        root.addView(hero, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 14.dp() })
+        val searchCard = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp()); background = rounded(0xffffffff.toInt(), 17) }
+        searchInput = EditText(this).apply { hint = "단어, 숙어 또는 구동사"; setSingleLine(true); textSize = 16f; setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp()); background = android.graphics.drawable.ColorDrawable(0x00000000); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
+        searchInput.setOnEditorActionListener { _, actionId, _ -> if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) { searchNow(); true } else false }
+        searchCard.addView(searchInput, LinearLayout.LayoutParams(0, 50.dp(), 1f))
+        searchCard.addView(button("검색").apply { setOnClickListener { searchNow() } }, LinearLayout.LayoutParams(84.dp(), 50.dp()))
+        root.addView(searchCard)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 14.dp(), 0, 12.dp()) }
         val searchTab = button("검색 결과").apply { setOnClickListener { showSaved = false; showPage() } }
         val savedTab = button("저장 단어").apply { setOnClickListener { showSaved = true; renderSaved(); showPage() } }
-        tabs.addView(searchTab, LinearLayout.LayoutParams(0, 44.dp(), 1f)); tabs.addView(savedTab, LinearLayout.LayoutParams(0, 44.dp(), 1f).apply { leftMargin = 8.dp() })
+        tabs.addView(searchTab, LinearLayout.LayoutParams(0, 46.dp(), 1f)); tabs.addView(savedTab, LinearLayout.LayoutParams(0, 46.dp(), 1f).apply { leftMargin = 8.dp() })
         root.addView(tabs)
-        status = label("검색 결과가 여기에 표시됩니다.", 14, false, 0xff5d6877.toInt())
+        status = label("검색어를 입력하면 뜻과 예문을 찾아드립니다.", 14, false, 0xff5d6877.toInt()).apply { setPadding(2.dp(), 0, 2.dp(), 4.dp()) }
         root.addView(status)
         val scroll = ScrollView(this).apply { setFillViewport(true) }
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         resultBox = content
-        savedBox = content
         scroll.addView(content)
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
+    }
+
+    private fun searchNow() {
+        val q = searchInput.text.toString().trim()
+        (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(searchInput.windowToken, 0)
+        searchInput.clearFocus()
+        if (q.isNotEmpty()) lookup(q) else toast("검색어를 입력해 주세요")
     }
 
     private fun showPage() { if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, false) } } }
@@ -100,12 +116,51 @@ class MainActivity : Activity() {
                 val e = WordEntry(word = q, ipa = data.second, korean = translated, english = data.first, examples = data.third)
                 runOnUiThread { current = e; status.text = "검색 결과"; showSaved = false; resultBox.removeAllViews(); showEntry(e, true) }
             } catch (e: Exception) {
-                runOnUiThread { status.text = "검색하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요. (${e.message ?: "오류"})" }
+                val suggestions = try { fetchSuggestions(q) } catch (_: Exception) { emptyList() }
+                runOnUiThread {
+                    showSaved = false
+                    status.text = if (suggestions.isEmpty()) "검색 서버가 응답하지 않습니다. 잠시 후 다시 시도해 주세요." else "‘$q’ 검색에 실패했습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
+                    resultBox.removeAllViews()
+                    if (suggestions.isNotEmpty()) showSuggestions(suggestions)
+                }
             }
         }
     }
 
+    private fun fetchSuggestions(q: String): List<String> {
+        val encoded = URLEncoder.encode(q, "UTF-8")
+        val response = JSONArray(http("https://api.datamuse.com/sug?s=$encoded&max=6", 3500, 5000))
+        val out = linkedSetOf<String>()
+        for (i in 0 until response.length()) {
+            val word = response.optJSONObject(i)?.optString("word", "")?.trim().orEmpty()
+            if (word.isNotBlank() && !word.equals(q, ignoreCase = true)) out += word
+        }
+        return out.take(5)
+    }
+
+    private fun showSuggestions(words: List<String>) {
+        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18.dp(), 16.dp(), 18.dp(), 16.dp()); background = rounded(0xffffffff.toInt(), 18) }
+        card.addView(label("혹시 이 단어인가요?", 18, true, dark))
+        card.addView(label("가장 가까운 철자부터 보여드려요.", 13, false, 0xff64748b.toInt()).apply { setPadding(0, 4.dp(), 0, 10.dp()) })
+        words.forEach { candidate ->
+            val pick = button("$candidate   ›").apply {
+                gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                setOnClickListener { searchInput.setText(candidate); lookup(candidate) }
+            }
+            card.addView(pick, LinearLayout.LayoutParams(-1, 44.dp()).apply { topMargin = 5.dp() })
+        }
+        resultBox.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8.dp() })
+    }
+
     private fun fetchDictionary(q: String): Triple<String, String, String> {
+        return try {
+            fetchFreeDictionary(q)
+        } catch (primaryError: Exception) {
+            try { fetchDatamuseDictionary(q) } catch (_: Exception) { throw primaryError }
+        }
+    }
+
+    private fun fetchFreeDictionary(q: String): Triple<String, String, String> {
         val encoded = URLEncoder.encode(q, "UTF-8").replace("+", "%20")
         val root = JSONArray(http("https://api.dictionaryapi.dev/api/v2/entries/en/$encoded"))
         val json = root.optJSONObject(0) ?: throw IllegalStateException("사전 결과가 없습니다")
@@ -128,6 +183,30 @@ class MainActivity : Activity() {
         return Triple(definitions.take(3).mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n"), ipa.ifBlank { "발음기호 정보 없음" }, samples.take(3).joinToString("\n"))
     }
 
+    private fun fetchDatamuseDictionary(q: String): Triple<String, String, String> {
+        val encoded = URLEncoder.encode(q, "UTF-8")
+        val response = JSONArray(http("https://api.datamuse.com/words?sp=$encoded&qe=sp&md=dp&ipa=1&max=12"))
+        var exact: JSONObject? = null
+        for (i in 0 until response.length()) {
+            val item = response.optJSONObject(i) ?: continue
+            if (item.optString("word").equals(q, ignoreCase = true)) { exact = item; break }
+        }
+        val item = exact ?: throw IllegalStateException("정확히 일치하는 단어가 없습니다")
+        val rawDefs = item.optJSONArray("defs") ?: throw IllegalStateException("대체 사전 정의가 없습니다")
+        val definitions = (0 until rawDefs.length()).mapNotNull { i ->
+            rawDefs.optString(i).substringAfter('\t', rawDefs.optString(i)).trim().takeIf { it.isNotBlank() }
+        }.distinct().take(3)
+        if (definitions.isEmpty()) throw IllegalStateException("대체 사전 정의가 없습니다")
+        val tags = item.optJSONArray("tags") ?: JSONArray()
+        var ipa = ""
+        for (i in 0 until tags.length()) {
+            val tag = tags.optString(i)
+            if (tag.startsWith("pron:")) { ipa = tag.removePrefix("pron:"); break }
+        }
+        val example = "I learned how to use ‘$q’ in a sentence."
+        return Triple(definitions.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n"), ipa.ifBlank { "발음기호 정보 없음" }, example)
+    }
+
     private fun translate(text: String): String {
         val q = URLEncoder.encode(text.take(900), "UTF-8")
         val response = JSONObject(http("https://api.mymemory.translated.net/get?q=$q&langpair=en%7Cko"))
@@ -136,17 +215,20 @@ class MainActivity : Activity() {
         return translated
     }
 
-    private fun http(address: String): String {
+    private fun http(address: String, connectTimeout: Int = 6000, readTimeout: Int = 8000): String {
         val c = URL(address).openConnection() as HttpURLConnection
-        c.requestMethod = "GET"; c.connectTimeout = 12000; c.readTimeout = 16000
+        c.requestMethod = "GET"; c.connectTimeout = connectTimeout; c.readTimeout = readTimeout
         c.setRequestProperty("User-Agent", "SajeonApp/1.0 (Android)")
         return try { val code = c.responseCode; val stream = if (code in 200..299) c.inputStream else c.errorStream; val body = stream.bufferedReader().use { it.readText() }; if (code !in 200..299) throw IllegalStateException("HTTP $code"); body } finally { c.disconnect() }
     }
 
     private fun showEntry(e: WordEntry, canSave: Boolean) {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18.dp(), 18.dp(), 18.dp(), 18.dp()); background = rounded(0xffffffff.toInt(), 18) }
-        card.addView(label(e.word, 25, true, dark))
-        card.addView(label(e.ipa, 15, false, 0xff526174.toInt()).apply { setPadding(0, 4.dp(), 0, 16.dp()) })
+        val wordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        wordRow.addView(label(e.word, 25, true, dark), LinearLayout.LayoutParams(0, -2, 1f))
+        wordRow.addView(button("🔊 듣기").apply { setOnClickListener { speak(e.word) } })
+        card.addView(wordRow)
+        card.addView(label(e.ipa, 15, false, 0xff526174.toInt()).apply { setPadding(0, 4.dp(), 0, 12.dp()) })
         section(card, "한글 의미", e.korean)
         section(card, "English definition", e.english)
         section(card, "예문", e.examples)
@@ -155,6 +237,12 @@ class MainActivity : Activity() {
             card.addView(saveButton, LinearLayout.LayoutParams(-1, 48.dp()).apply { topMargin = 14.dp() })
         }
         resultBox.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8.dp(); bottomMargin = 12.dp() })
+    }
+
+    private fun speak(text: String) {
+        if (!ttsReady) { toast("영어 음성 엔진을 준비하고 있습니다"); return }
+        tts?.setLanguage(Locale.US)
+        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "word-pronunciation")
     }
 
     private fun renderSaved() {
@@ -217,4 +305,11 @@ class MainActivity : Activity() {
     private fun rounded(color: Int, radius: Int) = android.graphics.drawable.GradientDrawable().apply { setColor(color); cornerRadius = radius.dp().toFloat() }
     private fun Int.dp() = (this * resources.displayMetrics.density).toInt()
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
+    override fun onDestroy() {
+        tts?.stop()
+        tts?.shutdown()
+        io.shutdown()
+        super.onDestroy()
+    }
 }
