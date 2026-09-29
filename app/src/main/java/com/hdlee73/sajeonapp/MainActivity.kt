@@ -215,6 +215,20 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun lookupErrorMessage(error: Exception): String {
+        val details = generateSequence<Throwable>(error) { it.cause }
+            .mapNotNull { it.message }
+            .joinToString(" ")
+            .lowercase(Locale.ROOT)
+        return when {
+            "unknownhost" in details || "unable to resolve host" in details -> "인터넷 주소에 연결하지 못했습니다. 모바일 데이터나 Wi‑Fi 연결을 확인해 주세요."
+            "timeout" in details || "timed out" in details -> "사전 서버 응답이 늦습니다. 잠시 후 다시 검색해 주세요."
+            "http 404" in details || "not found" in details -> "단어를 찾지 못했습니다. 철자를 확인하거나 다른 표현으로 검색해 주세요."
+            "ssl" in details || "certificate" in details -> "보안 연결에 실패했습니다. 기기의 날짜·시간과 네트워크 설정을 확인해 주세요."
+            else -> "검색에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요. (${error.message?.take(100) ?: "연결 오류"})"
+        }
+    }
+
     private fun fetchSuggestions(q: String): List<String> {
         val encoded = URLEncoder.encode(q, "UTF-8")
         val response = JSONArray(http("https://api.datamuse.com/sug?s=$encoded&max=6", 2000, 2500))
