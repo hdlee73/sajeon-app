@@ -233,7 +233,7 @@ class MainActivity : Activity() {
         section(card, "English definition", e.english)
         section(card, "예문", e.examples)
         if (canSave) {
-            saveButton = button("이 단어 저장").apply { setOnClickListener { db.save(e); toast("저장했습니다"); renderSaved(); isEnabled = false; text = "저장됨" } }
+            val saveButton = button("이 단어 저장").apply { setOnClickListener { db.save(e); toast("저장했습니다"); renderSaved(); isEnabled = false; text = "저장됨" } }
             card.addView(saveButton, LinearLayout.LayoutParams(-1, 48.dp()).apply { topMargin = 14.dp() })
         }
         resultBox.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8.dp(); bottomMargin = 12.dp() })
