@@ -85,6 +85,8 @@ class MainActivity : Activity() {
     private var ttsReady = false
     private var current: WordEntry? = null
     private var showSaved = false
+    private var returnToPdf = false
+    private lateinit var returnButton: Button
     private val blue = 0xff245bd6.toInt()
     private val dark = 0xff182230.toInt()
 
@@ -92,6 +94,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         db = EntryDb(this)
         glossary = LocalGlossary(this)
+        returnToPdf = intent?.getBooleanExtra("return_to_pdf", false) == true
         buildUi()
         tts = TextToSpeech(this) { result ->
             ttsReady = result == TextToSpeech.SUCCESS
@@ -107,6 +110,8 @@ class MainActivity : Activity() {
     }
 
     private fun handleIncomingSearch(intent: Intent?) {
+        returnToPdf = intent?.getBooleanExtra("return_to_pdf", false) == true
+        if (::returnButton.isInitialized) returnButton.visibility = if (returnToPdf) View.VISIBLE else View.GONE
         val query = intent?.getStringExtra("query")?.trim().orEmpty()
         if (query.isNotEmpty()) {
             showSaved = false
@@ -131,6 +136,8 @@ class MainActivity : Activity() {
             view.setPadding(20.dp(), 16.dp() + topInset, 20.dp(), 12.dp() + bottomInset)
             insets
         }
+        returnButton = button("← PDF로 돌아가기").apply { visibility = if (returnToPdf) View.VISIBLE else View.GONE; setOnClickListener { finish() } }
+        root.addView(returnButton, LinearLayout.LayoutParams(-1, 46.dp()).apply { bottomMargin = 10.dp() })
         val hero = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 18.dp(), 20.dp(), 18.dp()); background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR, intArrayOf(0xff142949.toInt(), 0xff294c79.toInt())).apply { cornerRadius = 22.dp().toFloat() } }
         hero.addView(label("LEXI  ·  단어장", 25, true, 0xffffffff.toInt()))
         hero.addView(label("영어 표현을 찾고, 듣고, 내 단어로 저장하세요", 14, false, 0xffdce8f6.toInt()).apply { setPadding(0, 5.dp(), 0, 0) })
