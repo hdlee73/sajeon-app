@@ -1,27 +1,29 @@
-# 사전앱 (Sajeon App)
+# LEXI · 단어장 (Sajeon App)
 
 Android English vocabulary lookup and personal wordbook for English words, idioms, and phrasal verbs.
 
-## Features
+## What changed in 1.2.0
 
-- Look up English definitions and available IPA pronunciations from the Free Dictionary API.
-- Play words and phrases with the phone's English text-to-speech voice.
-- If a lookup fails, choose from spelling suggestions powered by Datamuse.
-- Translate definitions into Korean using MyMemory. Example sentences come from dictionary entries; a simple sample sentence is shown when none is supplied.
-- Save only entries you choose. Saved words remain on the device in SQLite and can be viewed or deleted.
-- Export saved entries as a real `.xlsx` workbook through Android's document picker. Choose a folder and filename there. Google Drive appears as a destination when its Android document provider is installed and signed in.
-- Workbook columns: English word and IPA; Korean meaning followed by English definitions on a new line; English examples.
+- Common Korean meanings load from a local 48,037-entry English-Korean dictionary bundled into the APK at build time, so the first meaning appears without waiting for a translation server.
+- A context-sensitive Korean gloss is used for “stuck”: “끼어 움직이지 않는; (일이나 문제 해결이) 막힌, 진전이 없는”.
+- English definitions, IPA pronunciations, and authentic dictionary examples are fetched together from FreeDictionaryAPI.com, prioritizing IPA fields and examples from Wiktionary. A secondary dictionary API is used if that service cannot respond.
+- Missing examples are shown as unavailable; the app no longer invents a sample sentence.
+- Search results are cached during the app session. Saved words stay on the device and can be exported as `.xlsx`.
+
+## Data attribution and license
+
+The bundled Korean gloss dictionary is the [Open English-Korean Dictionary](https://github.com/jhseo1211/open-english-korean-dict), CC BY-SA 4.0. Its upstream credits list kengdic, cc-kedict, ipa-dict, CMU Pronouncing Dictionary, CEFR-J, NGSL, NAWL, and Wiktionary. Its source snapshot is pinned to commit `92cbfe63deee1ccead2c42677027d8b4a305b2c7`. See [CREDITS.md](CREDITS.md) and the upstream [license terms](https://creativecommons.org/licenses/by-sa/4.0/).
+
+English definitions, IPA, and examples are from [FreeDictionaryAPI.com](https://freedictionaryapi.com/) using [Wiktionary](https://en.wiktionary.org/) content, licensed CC BY-SA 4.0. The app displays attribution on each entry card; the release page links back to the provider and source.
 
 ## Build
 
-Open this project in Android Studio or run:
+Open in Android Studio or run:
 
 ```sh
 gradle :app:assembleDebug
 ```
 
-The APK is written to `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds the debug APK on pushes to `main`; pushing a tag such as `v1.0.0` also creates a GitHub Release with the APK attached. A main-branch commit whose message includes `[release]` publishes the version in `app/build.gradle.kts`.
+The release workflow downloads the pinned SQLite dictionary to `app/src/main/assets/word_dictionary.sqlite` before packaging. For a local build, download that file into the same path first. Network access is required for IPA/examples and for words not in the local Korean dictionary. If the enrichment API is unavailable, the local Korean meaning remains visible.
 
-## Notes
-
-Network access is needed for lookups, suggestions, and translation. Saved entries and exports are local unless you choose a cloud document destination. Dictionary text and translations are provided by third-party services and may need review. Datamuse's documentation says API keys will be required from January 1, 2027.
+GitHub Actions builds the APK on pushes to `main`; commits with `[release]` also publish a GitHub Release.

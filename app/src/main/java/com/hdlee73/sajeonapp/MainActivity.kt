@@ -23,10 +23,35 @@ import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 data class WordEntry(val id: Long = 0, val word: String, val ipa: String, val korean: String, val english: String, val examples: String)
+private data class LocalMeaning(val korean: String, val english: String, val ipa: String)
+
+private class LocalGlossary(private val activity: Activity) {
+    private var database: SQLiteDatabase? = null
+    @Synchronized private fun open(): SQLiteDatabase? {
+        database?.let { return it }
+        return try {
+            val file = activity.getDatabasePath("meaning_dictionary.sqlite")
+            if (!file.exists()) {
+                file.parentFile?.mkdirs()
+                activity.assets.open("word_dictionary.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
+            }
+            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).also { database = it }
+        } catch (_: Exception) { null }
+    }
+    fun lookup(word: String): LocalMeaning? {
+        val db = open() ?: return null
+        return try {
+            db.rawQuery("SELECT meaning_ko, meaning_en, ipa FROM words WHERE word = ? COLLATE NOCASE LIMIT 1", arrayOf(word.trim())).use { c ->
+                if (c.moveToFirst()) LocalMeaning(c.getString(0).orEmpty(), c.getString(1).orEmpty(), c.getString(2).orEmpty()) else null
+            }
+        } catch (_: Exception) { null }
+    }
+}
 
 class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 1) {
     override fun onCreate(db: SQLiteDatabase) {
@@ -49,6 +74,9 @@ class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 
 
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val lookupSequence = AtomicInteger(0)
+    private val resultCache = mutableMapOf<String, WordEntry>()
+    private lateinit var glossary: LocalGlossary
     private lateinit var db: EntryDb
     private lateinit var resultBox: LinearLayout
     private lateinit var status: TextView
@@ -63,6 +91,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = EntryDb(this)
+        glossary = LocalGlossary(this)
         buildUi()
         tts = TextToSpeech(this) { result ->
             ttsReady = result == TextToSpeech.SUCCESS
@@ -118,21 +147,69 @@ class MainActivity : Activity() {
     private fun showPage() { if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, false) } } }
 
     private fun lookup(q: String) {
+        val requestId = lookupSequence.incrementAndGet()
         status.text = "‘$q’ 검색 중…"
+        resultBox.removeAllViews()
+        showSaved = false
+        val cached = synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] }
+        if (cached != null) {
+            current = cached
+            status.text = "검색 결과 · 저장된 검색"
+            showEntry(cached, true)
+            return
+        }
         io.execute {
-            try {
-                val data = fetchDictionary(q)
-                val translated = try { translate(data.first) } catch (_: Exception) { "번역 서비스를 사용할 수 없습니다. 영문 의미를 확인해 주세요." }
-                val e = WordEntry(word = q, ipa = data.second, korean = translated, english = data.first, examples = data.third)
-                runOnUiThread { current = e; status.text = "검색 결과"; showSaved = false; resultBox.removeAllViews(); showEntry(e, true) }
-            } catch (e: Exception) {
-                val suggestions = try { fetchSuggestions(q) } catch (_: Exception) { emptyList() }
+            val local = glossary.lookup(q)
+            if (requestId != lookupSequence.get()) return@execute
+            if (local != null) {
+                val initial = WordEntry(
+                    word = q,
+                    ipa = local.ipa.ifBlank { "발음기호 불러오는 중…" },
+                    korean = naturalizeKorean(q, local.korean),
+                    english = local.english.ifBlank { "영어 풀이를 불러오는 중…" },
+                    examples = "사전 예문을 불러오는 중…"
+                )
                 runOnUiThread {
-                    showSaved = false
-                    status.text = if (suggestions.isNotEmpty()) "‘$q’ 검색 결과가 없습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
-                        else lookupErrorMessage(e)
+                    if (requestId != lookupSequence.get()) return@runOnUiThread
+                    current = initial
+                    status.text = "한글 뜻 표시됨 · 발음과 예문을 불러오는 중…"
                     resultBox.removeAllViews()
-                    if (suggestions.isNotEmpty()) showSuggestions(suggestions)
+                    showEntry(initial, true)
+                }
+            }
+            try {
+                val online = fetchDictionary(q)
+                val korean = local?.let { naturalizeKorean(q, it.korean) } ?: try { translate(online.first) } catch (_: Exception) { "뜻을 불러오지 못했습니다. 영어 풀이를 참고해 주세요." }
+                val entry = WordEntry(
+                    word = q,
+                    ipa = online.second.ifBlank { local?.ipa?.ifBlank { "발음기호 정보 없음" } ?: "발음기호 정보 없음" },
+                    korean = korean,
+                    english = online.first,
+                    examples = online.third
+                )
+                synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
+                runOnUiThread {
+                    if (requestId != lookupSequence.get()) return@runOnUiThread
+                    current = entry
+                    status.text = "검색 결과"
+                    resultBox.removeAllViews()
+                    showEntry(entry, true)
+                }
+            } catch (e: Exception) {
+                if (local != null) {
+                    runOnUiThread {
+                        if (requestId != lookupSequence.get()) return@runOnUiThread
+                        status.text = "한글 뜻은 표시했습니다. 발음과 예문은 연결 후 다시 불러올 수 있어요."
+                    }
+                } else {
+                    val suggestions = try { fetchSuggestions(q) } catch (_: Exception) { emptyList() }
+                    runOnUiThread {
+                        if (requestId != lookupSequence.get()) return@runOnUiThread
+                        status.text = if (suggestions.isNotEmpty()) "‘$q’ 검색 결과가 없습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
+                            else lookupErrorMessage(e)
+                        resultBox.removeAllViews()
+                        if (suggestions.isNotEmpty()) showSuggestions(suggestions)
+                    }
                 }
             }
         }
@@ -140,7 +217,7 @@ class MainActivity : Activity() {
 
     private fun fetchSuggestions(q: String): List<String> {
         val encoded = URLEncoder.encode(q, "UTF-8")
-        val response = JSONArray(http("https://api.datamuse.com/sug?s=$encoded&max=6", 3500, 5000))
+        val response = JSONArray(http("https://api.datamuse.com/sug?s=$encoded&max=6", 2000, 2500))
         val out = linkedSetOf<String>()
         for (i in 0 until response.length()) {
             val word = response.optJSONObject(i)?.optString("word", "")?.trim().orEmpty()
@@ -165,35 +242,56 @@ class MainActivity : Activity() {
 
     private fun fetchDictionary(q: String): Triple<String, String, String> {
         return try {
-            fetchFreeDictionary(q)
+            fetchOpenDictionary(q)
         } catch (primaryError: Exception) {
-            try { fetchDatamuseDictionary(q) } catch (fallbackError: Exception) {
+            try { fetchLegacyDictionary(q) } catch (fallbackError: Exception) {
                 throw IllegalStateException(
-                    "Free Dictionary: ${primaryError.message ?: primaryError.javaClass.simpleName}; " +
-                        "Datamuse: ${fallbackError.message ?: fallbackError.javaClass.simpleName}",
-                    primaryError
+                    "FreeDictionaryAPI: ${primaryError.message ?: primaryError.javaClass.simpleName}; " +
+                        "Dictionary API: ${fallbackError.message ?: fallbackError.javaClass.simpleName}", primaryError
                 )
             }
         }
     }
 
-    private fun lookupErrorMessage(error: Exception): String {
-        val details = generateSequence<Throwable>(error) { it.cause }
-            .mapNotNull { it.message }
-            .joinToString(" ")
-            .lowercase(Locale.ROOT)
-        return when {
-            "unknownhost" in details || "unable to resolve host" in details -> "인터넷 주소에 연결하지 못했습니다. 모바일 데이터나 Wi‑Fi 연결을 확인해 주세요."
-            "timeout" in details || "timed out" in details -> "사전 서버 응답이 늦습니다. 잠시 후 다시 검색해 주세요."
-            "http 404" in details || "not found" in details -> "단어를 찾지 못했습니다. 철자를 확인하거나 다른 표현으로 검색해 주세요."
-            "ssl" in details || "certificate" in details -> "보안 연결에 실패했습니다. 기기의 날짜·시간과 네트워크 설정을 확인해 주세요."
-            else -> "검색에 실패했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요. (${error.message?.take(100) ?: "연결 오류"})"
+    private fun fetchOpenDictionary(q: String): Triple<String, String, String> {
+        val encoded = URLEncoder.encode(q, "UTF-8").replace("+", "%20")
+        val root = JSONObject(http("https://freedictionaryapi.com/api/v1/entries/en/$encoded?translations=true", 3500, 5000))
+        val entries = root.optJSONArray("entries") ?: JSONArray()
+        val allSenses = mutableListOf<JSONObject>()
+        var ipa = ""
+        for (i in 0 until entries.length()) {
+            val entry = entries.optJSONObject(i) ?: continue
+            if (ipa.isBlank()) {
+                val pronunciations = entry.optJSONArray("pronunciations") ?: JSONArray()
+                for (j in 0 until pronunciations.length()) {
+                    val pronunciation = pronunciations.optJSONObject(j) ?: continue
+                    if (pronunciation.optString("type").equals("ipa", true)) {
+                        val candidate = pronunciation.optString("text").trim()
+                        if (candidate.isNotBlank()) { ipa = candidate; break }
+                    }
+                }
+            }
+            val senses = entry.optJSONArray("senses") ?: JSONArray()
+            for (j in 0 until senses.length()) senses.optJSONObject(j)?.let { allSenses += it }
         }
+        val useful = allSenses.filterNot { sense ->
+            val tags = sense.optJSONArray("tags") ?: JSONArray()
+            (0 until tags.length()).any { tags.optString(it).equals("form of", true) }
+        }.ifEmpty { allSenses }
+        val definitions = useful.mapNotNull { it.optString("definition").trim().takeIf(String::isNotBlank) }.distinct().take(4)
+        if (definitions.isEmpty()) throw IllegalStateException("사전 결과가 없습니다")
+        val samples = useful.flatMap { sense ->
+            val examples = sense.optJSONArray("examples") ?: JSONArray()
+            (0 until examples.length()).mapNotNull { examples.optString(it).trim().takeIf(String::isNotBlank) }
+        }.distinct().take(3)
+        val english = definitions.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
+        val examples = if (samples.isEmpty()) "이 단어의 예문은 사전에서 제공하지 않습니다." else samples.joinToString("\n")
+        return Triple(english, ipa, examples)
     }
 
-    private fun fetchFreeDictionary(q: String): Triple<String, String, String> {
+    private fun fetchLegacyDictionary(q: String): Triple<String, String, String> {
         val encoded = URLEncoder.encode(q, "UTF-8").replace("+", "%20")
-        val root = JSONArray(http("https://api.dictionaryapi.dev/api/v2/entries/en/$encoded"))
+        val root = JSONArray(http("https://api.dictionaryapi.dev/api/v2/entries/en/$encoded", 2500, 4000))
         val json = root.optJSONObject(0) ?: throw IllegalStateException("사전 결과가 없습니다")
         val meanings = json.optJSONArray("meanings") ?: JSONArray()
         val definitions = linkedSetOf<String>(); val samples = linkedSetOf<String>()
@@ -201,46 +299,35 @@ class MainActivity : Activity() {
             val defs = meanings.optJSONObject(i)?.optJSONArray("definitions") ?: continue
             for (j in 0 until defs.length()) {
                 val item = defs.optJSONObject(j) ?: continue
-                item.optString("definition").takeIf { it.isNotBlank() }?.let { definitions.add(it) }
-                item.optString("example").takeIf { it.isNotBlank() }?.let { samples.add(it) }
+                item.optString("definition").takeIf(String::isNotBlank)?.let(definitions::add)
+                item.optString("example").takeIf(String::isNotBlank)?.let(samples::add)
             }
         }
-        if (definitions.isEmpty()) throw IllegalStateException("의미를 찾을 수 없습니다")
+        if (definitions.isEmpty()) throw IllegalStateException("정의를 찾지 못했습니다")
         val phonetics = json.optJSONArray("phonetics") ?: JSONArray()
         var ipa = ""
-        for (i in 0 until phonetics.length()) { val p = phonetics.optJSONObject(i)?.optString("text", "") ?: ""; if (p.isNotBlank()) { ipa = p; break } }
-        val cleanWord = json.optString("word", q)
-        if (samples.isEmpty()) samples += "I learned how to use ‘$cleanWord’ in a sentence."
-        return Triple(definitions.take(3).mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n"), ipa.ifBlank { "발음기호 정보 없음" }, samples.take(3).joinToString("\n"))
+        for (i in 0 until phonetics.length()) {
+            val p = phonetics.optJSONObject(i) ?: continue
+            val candidate = p.optString("text").trim()
+            if (candidate.startsWith("/") || candidate.startsWith("[")) { ipa = candidate; break }
+        }
+        val english = definitions.take(4).mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
+        val examples = if (samples.isEmpty()) "이 단어의 예문은 사전에서 제공하지 않습니다." else samples.take(3).joinToString("\n")
+        return Triple(english, ipa, examples)
     }
 
-    private fun fetchDatamuseDictionary(q: String): Triple<String, String, String> {
-        val encoded = URLEncoder.encode(q, "UTF-8")
-        val response = JSONArray(http("https://api.datamuse.com/words?sp=$encoded&qe=sp&md=dp&ipa=1&max=12"))
-        var exact: JSONObject? = null
-        for (i in 0 until response.length()) {
-            val item = response.optJSONObject(i) ?: continue
-            if (item.optString("word").equals(q, ignoreCase = true)) { exact = item; break }
+    private fun naturalizeKorean(word: String, dictionaryGloss: String): String {
+        // Add natural, sense-aware Korean glosses for common inflected forms whose
+        // single-word database gloss would otherwise hide the contextual meaning.
+        return when (word.trim().lowercase(Locale.ROOT)) {
+            "stuck" -> "끼어 움직이지 않는; (일이나 문제 해결이) 막힌, 진전이 없는"
+            else -> dictionaryGloss.trim().ifBlank { "한글 뜻을 찾지 못했습니다." }
         }
-        val item = exact ?: throw IllegalStateException("정확히 일치하는 단어가 없습니다")
-        val rawDefs = item.optJSONArray("defs") ?: throw IllegalStateException("대체 사전 정의가 없습니다")
-        val definitions = (0 until rawDefs.length()).mapNotNull { i ->
-            rawDefs.optString(i).substringAfter('\t', rawDefs.optString(i)).trim().takeIf { it.isNotBlank() }
-        }.distinct().take(3)
-        if (definitions.isEmpty()) throw IllegalStateException("대체 사전 정의가 없습니다")
-        val tags = item.optJSONArray("tags") ?: JSONArray()
-        var ipa = ""
-        for (i in 0 until tags.length()) {
-            val tag = tags.optString(i)
-            if (tag.startsWith("pron:")) { ipa = tag.removePrefix("pron:"); break }
-        }
-        val example = "I learned how to use ‘$q’ in a sentence."
-        return Triple(definitions.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n"), ipa.ifBlank { "발음기호 정보 없음" }, example)
     }
 
     private fun translate(text: String): String {
         val q = URLEncoder.encode(text.take(900), "UTF-8")
-        val response = JSONObject(http("https://api.mymemory.translated.net/get?q=$q&langpair=en%7Cko"))
+        val response = JSONObject(http("https://api.mymemory.translated.net/get?q=$q&langpair=en%7Cko", 2500, 3500))
         val translated = response.optJSONObject("responseData")?.optString("translatedText", "")?.trim().orEmpty()
         if (translated.isBlank()) throw IllegalStateException("번역 결과가 없습니다")
         return translated
@@ -263,6 +350,11 @@ class MainActivity : Activity() {
         section(card, "한글 의미", e.korean)
         section(card, "English definition", e.english)
         section(card, "예문", e.examples)
+        val credit = label("자료 출처: Open English-Korean Dictionary (CC BY-SA 4.0) · FreeDictionaryAPI.com / Wiktionary (CC BY-SA 4.0)", 10, false, 0xff64748b.toInt()).apply {
+            setPadding(0, 12.dp(), 0, 0)
+            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://freedictionaryapi.com/"))) }
+        }
+        card.addView(credit)
         if (canSave) {
             val saveButton = button("이 단어 저장").apply { setOnClickListener { db.save(e); toast("저장했습니다"); renderSaved(); isEnabled = false; text = "저장됨" } }
             card.addView(saveButton, LinearLayout.LayoutParams(-1, 48.dp()).apply { topMargin = 14.dp() })
