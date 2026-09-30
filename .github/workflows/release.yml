@@ -32,6 +32,18 @@ jobs:
           curl --fail --location --retry 3 \
             https://raw.githubusercontent.com/jhseo1211/open-english-korean-dict/92cbfe63deee1ccead2c42677027d8b4a305b2c7/dict/word_dictionary.sqlite \
             --output app/src/main/assets/word_dictionary.sqlite
+      - name: Restore fixed APK signing key
+        env:
+          ANDROID_DEBUG_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_DEBUG_KEYSTORE_BASE64" ]; then
+            echo "::error::Configure ANDROID_DEBUG_KEYSTORE_BASE64 with a permanent keystore (alias androiddebugkey, store/key password android). Refusing to generate a different signing key for each update."
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          printf '%s' "$ANDROID_DEBUG_KEYSTORE_BASE64" | base64 --decode > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey > /dev/null
       - name: Build APK
         run: gradle :app:testDebugUnitTest :app:assembleDebug
       - name: Upload APK artifact

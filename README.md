@@ -26,3 +26,13 @@ gradle :app:assembleDebug
 The release workflow downloads the pinned SQLite dictionary to `app/src/main/assets/word_dictionary.sqlite` before packaging. For a local build, download that file into the same path first. Network access is required for IPA/examples and for words not in the local Korean dictionary. If the enrichment API is unavailable, the local Korean meaning remains visible.
 
 GitHub Actions builds the APK on pushes to `main`; commits with `[release]` also publish a GitHub Release.
+
+## APK update signing
+
+Versions through v1.4.0 were built with ephemeral GitHub runner debug keys. Their signing certificates differ, so an APK from one build cannot update an installed APK from another build. An old APK's public certificate cannot recover its private signing key.
+
+The workflow now requires the repository Actions secret `ANDROID_DEBUG_KEYSTORE_BASE64`. Supply the Base64 encoding of a fixed Java keystore with alias `androiddebugkey`, store password `android`, and key password `android`. Keep the original keystore in a durable private backup. Never commit a private signing key to this public repository. This configuration retains the current debug build convention; production distribution should use a dedicated release signing configuration.
+
+The workflow fails before building/publishing if the secret is absent instead of silently generating an incompatible signing key. A newly created key will not fix compatibility with already installed versions signed with lost keys.
+
+Do not uninstall an existing installation before exporting saved vocabulary. The current Excel export is a backup for viewing the words; it does not automatically restore them into the app.
