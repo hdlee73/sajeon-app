@@ -8,6 +8,7 @@ import concurrent.futures
 import json
 import re
 import sqlite3
+import subprocess
 import time
 import urllib.request
 import zipfile
@@ -88,9 +89,8 @@ def build_dictionary(paths, destination):
 def build_examples(destination):
     archive = ROOT / '.learning_data' / 'kor-eng.zip'
     if not archive.exists():
-        request = urllib.request.Request('https://www.manythings.org/anki/kor-eng.zip', headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(request, timeout=60) as response:
-            archive.write_bytes(response.read())
+        subprocess.run(['curl', '--fail', '--location', '--retry', '3', '--max-time', '60',
+                        'https://www.manythings.org/anki/kor-eng.zip', '--output', str(archive)], check=True)
     with zipfile.ZipFile(archive) as z:
         data = z.read('kor.txt').decode('utf8')
     destination.unlink(missing_ok=True)
