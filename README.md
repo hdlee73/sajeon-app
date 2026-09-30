@@ -1,4 +1,4 @@
-# LEXI · 단어장 (Sajeon App)
+# 영어단어장 (Sajeon App)
 
 Android English vocabulary lookup and personal wordbook for English words, idioms, and phrasal verbs.
 
@@ -48,3 +48,9 @@ Spontaneous is separately reviewed with distinct senses and three original usage
 Data source and licenses: app/src/main/assets/DATA_SOURCES.txt. NIKL-derived data: CC BY-SA 2.0 KR. Tatoeba sentence pairs: CC BY 2.0 France. Build script and all generated adaptations are available in this repository.
 
 Ordinary pushes run data validation and unit tests without requiring a signing key or publishing an ephemeral-key APK. APK publication still requires the fixed signing key configured after the update-signature issue.
+
+## v1.5.1 study vocabulary display
+
+Naver remains an optional external dictionary search link. In-app Korean meanings use NIKL native dictionary definitions and reviewed entries; English definitions use the bundled equivalents or FreeDictionaryAPI/Wiktionary. Naver content is not collected or represented as app data.
+
+Numbered meanings are limited to four senses on the search screen, saved-word screen, new saved records, and Excel export. Existing saved words are retained. Human bilingual corpus examples take priority even when the English definition needs an online lookup. Automatic translations remain attributed when no human pair is available. Missing Korean dictionary coverage is explicitly marked.

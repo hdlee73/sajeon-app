@@ -238,7 +238,7 @@ class MainActivity : Activity() {
                     ipa = "",
                     korean = naturalizeKorean(q, local.korean),
                     english = local.english.ifBlank { "영어 풀이를 불러오는 중…" },
-                    examples = bilingualFallbackExample(q),
+                    examples = humanExamples.takeIf { it.isNotEmpty() }?.joinToString("\n") { "${it.english}\t${it.korean}" } ?: bilingualFallbackExample(q),
                     source = "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)"
                 )
                 runOnUiThread {
@@ -257,14 +257,14 @@ class MainActivity : Activity() {
                 val sentences = online.third.split("\n").map { it.trim() }
                     .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
                     .distinct().ifEmpty { listOf(fallbackExample(q)) }.take(2)
-                val bilingual = sentences.map { sentence ->
+                val bilingual = if (humanExamples.isNotEmpty()) humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" } else sentences.map { sentence ->
                     val ko = if (sentence == fallbackExample(q)) "오늘 대화에서 “$q”라는 표현을 들었습니다." else try { translate(sentence) } catch (_: Exception) { "" }
                     if (ko.isBlank()) "$sentence\t(해석을 불러오지 못했습니다)" else "$sentence\t$ko"
                 }.joinToString("\n")
                 val entry = WordEntry(word = q, ipa = "", korean = korean,
                     english = local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
                     source = (if (local != null) "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)" else "FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)") +
-                        "\n일반 예문 해석: Google ML Kit 자동 번역")
+                        (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba" else "\n일반 예문 해석: Google ML Kit 자동 번역"))
                 if (!korean.contains("불러오지 못") && !bilingual.contains("불러오지 못")) {
                     synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
                 }
@@ -462,14 +462,13 @@ class MainActivity : Activity() {
         wordRow.addView(button("🔊 듣기").apply { setOnClickListener { speak(e.word) } })
         card.addView(wordRow)
         section(card, "한글 의미", e.korean)
-        card.addView(button("네이버 영한사전").apply { setOnClickListener {
+        card.addView(button("네이버 사전에서 더 보기 ↗").apply { setOnClickListener {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://en.dict.naver.com/#/search?query=" + Uri.encode(e.word))))
         } }, LinearLayout.LayoutParams(-1, 42.dp()).apply { topMargin = 8.dp() })
         section(card, "English definition", e.english)
         section(card, if (e.examples == bilingualFallbackExample(e.word)) "표현을 언급하는 예문" else "예문 · 한국어 해석", displayExamples(e.examples))
         val credit = label(e.source.ifBlank { "의미별 자체 정리 · 직접 작성한 한영 예문" }, 10, false, 0xff64748b.toInt()).apply {
             setPadding(0, 12.dp(), 0, 0)
-            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://krdict.korean.go.kr/eng/mainAction"))) }
         }
         card.addView(credit)
         if (canSave) {
