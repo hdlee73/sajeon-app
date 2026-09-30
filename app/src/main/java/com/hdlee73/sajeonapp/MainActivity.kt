@@ -74,7 +74,8 @@ class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 
         }
         return out
     }
-    fun save(e: WordEntry): Boolean {
+    fun save(original: WordEntry): Boolean {
+        val e = original.studyVersion()
         val v = ContentValues().apply { put("word", e.word); put("ipa", ""); put("korean", e.korean); put("english", e.english); put("examples", e.examples); put("source", e.source) }
         return writableDatabase.insertWithOnConflict("entries", null, v, SQLiteDatabase.CONFLICT_REPLACE) >= 0
     }
@@ -453,7 +454,8 @@ class MainActivity : Activity() {
         return try { val code = c.responseCode; val stream = if (code in 200..299) c.inputStream else c.errorStream; val body = stream.bufferedReader().use { it.readText() }; if (code !in 200..299) throw IllegalStateException("HTTP $code"); body } finally { c.disconnect() }
     }
 
-    private fun showEntry(e: WordEntry, canSave: Boolean) {
+    private fun showEntry(original: WordEntry, canSave: Boolean) {
+        val e = original.studyVersion()
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18.dp(), 18.dp(), 18.dp(), 18.dp()); background = rounded(0xffffffff.toInt(), 18) }
         val wordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         wordRow.addView(label(e.word, 25, true, dark), LinearLayout.LayoutParams(0, -2, 1f))
@@ -486,7 +488,7 @@ class MainActivity : Activity() {
     private fun renderSaved() {
         if (!showSaved) return
         resultBox.removeAllViews()
-        val entries = db.all()
+        val entries = db.all().map { it.studyVersion() }
         if (entries.isEmpty()) { resultBox.addView(label("아직 저장한 단어가 없습니다. 검색 결과에서 원하는 단어만 저장할 수 있어요.", 15, false, 0xff5d6877.toInt()).apply { setPadding(4.dp(), 14.dp(), 4.dp(), 14.dp()) }); return }
         resultBox.addView(button("엑셀(.xlsx)로 내보내기").apply { setOnClickListener { createXlsx() } }, LinearLayout.LayoutParams(-1, 48.dp()).apply { bottomMargin = 12.dp() })
         entries.forEach { e ->
@@ -523,7 +525,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun makeWorkbook(entries: List<WordEntry>): ByteArray {
+    private fun makeWorkbook(originalEntries: List<WordEntry>): ByteArray {
+        val entries = originalEntries.map { it.studyVersion() }
         val rows = when (exportFormat) {
             2 -> mutableListOf(listOf("예문 한글 해석", "영어 예문")).apply {
                 entries.forEach { e -> examplePairs(e.examples).forEach { add(listOf(it.second, it.first)) } }
