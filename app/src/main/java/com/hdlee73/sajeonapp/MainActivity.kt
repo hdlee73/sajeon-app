@@ -53,11 +53,11 @@ private class LocalGlossary(private val activity: Activity) {
     }
 }
 
-class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 1) {
+class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL UNIQUE COLLATE NOCASE, ipa TEXT, korean TEXT, english TEXT, examples TEXT)")
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { if (oldVersion < 2) db.execSQL("UPDATE entries SET ipa=''") }
     fun all(): List<WordEntry> {
         val out = mutableListOf<WordEntry>()
         readableDatabase.rawQuery("SELECT id,word,ipa,korean,english,examples FROM entries ORDER BY word COLLATE NOCASE", null).use { c ->
@@ -66,7 +66,7 @@ class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 
         return out
     }
     fun save(e: WordEntry): Boolean {
-        val v = ContentValues().apply { put("word", e.word); put("ipa", e.ipa); put("korean", e.korean); put("english", e.english); put("examples", e.examples) }
+        val v = ContentValues().apply { put("word", e.word); put("ipa", ""); put("korean", e.korean); put("english", e.english); put("examples", e.examples) }
         return writableDatabase.insertWithOnConflict("entries", null, v, SQLiteDatabase.CONFLICT_REPLACE) >= 0
     }
     fun delete(id: Long) { writableDatabase.delete("entries", "id=?", arrayOf(id.toString())) }
@@ -85,6 +85,7 @@ class MainActivity : Activity() {
     private var ttsReady = false
     private var current: WordEntry? = null
     private var showSaved = false
+    private var exportFormat = 1
     private var returnToPdf = false
     private lateinit var returnButton: Button
     private val blue = 0xff245bd6.toInt()
@@ -189,29 +190,36 @@ class MainActivity : Activity() {
             if (local != null) {
                 val initial = WordEntry(
                     word = q,
-                    ipa = local.ipa.ifBlank { "발음기호 불러오는 중…" },
+                    ipa = "",
                     korean = naturalizeKorean(q, local.korean),
                     english = local.english.ifBlank { "영어 풀이를 불러오는 중…" },
-                    examples = "사전 예문을 불러오는 중…"
+                    examples = bilingualFallbackExample(q)
                 )
                 runOnUiThread {
                     if (requestId != lookupSequence.get()) return@runOnUiThread
                     current = initial
-                    status.text = "한글 뜻 표시됨 · 발음과 예문을 불러오는 중…"
+                    status.text = "한글 뜻 표시됨 · 예문을 불러오는 중…"
                     resultBox.removeAllViews()
                     showEntry(initial, true)
                 }
             }
             try {
                 val online = fetchDictionary(q)
-                val korean = local?.let { naturalizeKorean(q, it.korean) } ?: try { translate(online.first) } catch (_: Exception) { "뜻을 불러오지 못했습니다. 영어 풀이를 참고해 주세요." }
-                val entry = WordEntry(
-                    word = q,
-                    ipa = online.second.ifBlank { local?.ipa?.ifBlank { "발음기호 정보 없음" } ?: "발음기호 정보 없음" },
-                    korean = korean,
-                    english = online.first,
-                    examples = online.third
-                )
+                val korean = local?.let { naturalizeKorean(q, it.korean) }?.takeIf { it.isNotBlank() }
+                    ?: (try { koreanDictionaryMeaning(q) } catch (_: Exception) { "" }).ifBlank {
+                        try { translate(q) } catch (_: Exception) {
+                            try { translate(online.first.substringAfter(". ").lineSequence().first()) }
+                            catch (_: Exception) { "한국어 뜻을 불러오지 못했습니다. 인터넷 연결 후 다시 검색해 주세요." }
+                        }
+                    }
+                val sentences = online.third.split("\n").map { it.trim() }
+                    .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
+                    .distinct().ifEmpty { listOf(fallbackExample(q)) }.take(2)
+                val bilingual = sentences.map { sentence ->
+                    val ko = try { translate(sentence) } catch (_: Exception) { "" }
+                    if (ko.isBlank()) "$sentence\t(해석을 불러오지 못했습니다)" else "$sentence\t$ko"
+                }.joinToString("\n")
+                val entry = WordEntry(word = q, ipa = "", korean = korean, english = online.first, examples = bilingual)
                 synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
                 runOnUiThread {
                     if (requestId != lookupSequence.get()) return@runOnUiThread
@@ -324,7 +332,7 @@ class MainActivity : Activity() {
             (0 until examples.length()).mapNotNull { examples.optString(it).trim().takeIf(String::isNotBlank) }
         }.distinct().take(3)
         val english = definitions.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
-        val examples = if (samples.isEmpty()) "이 단어의 예문은 사전에서 제공하지 않습니다." else samples.joinToString("\n")
+        val examples = if (samples.isEmpty()) fallbackExample(q) else samples.joinToString("\n")
         return Triple(english, ipa, examples)
     }
 
@@ -351,9 +359,32 @@ class MainActivity : Activity() {
             if (candidate.startsWith("/") || candidate.startsWith("[")) { ipa = candidate; break }
         }
         val english = definitions.take(4).mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
-        val examples = if (samples.isEmpty()) "이 단어의 예문은 사전에서 제공하지 않습니다." else samples.take(3).joinToString("\n")
+        val examples = if (samples.isEmpty()) fallbackExample(q) else samples.take(3).joinToString("\n")
         return Triple(english, ipa, examples)
     }
+
+    private fun fallbackExample(word: String): String = "I heard “$word” in a conversation today."
+    private fun bilingualFallbackExample(word: String): String =
+        "${fallbackExample(word)}\t오늘 대화에서 “$word”라는 표현을 들었습니다."
+
+    private fun koreanDictionaryMeaning(word: String): String {
+        val page = URLEncoder.encode(word.replace(' ', '_'), "UTF-8")
+        val json = JSONObject(http("https://en.wiktionary.org/w/api.php?action=parse&page=$page&prop=wikitext&format=json&redirects=1", 2500, 3500))
+        val text = json.optJSONObject("parse")?.optJSONObject("wikitext")?.optString("*", "").orEmpty()
+        val terms = Regex("\\{\\{t(?:\\+|-)?\\|ko\\|([^|}]+)")
+            .findAll(text).map { it.groupValues[1].replace("_", " ").trim() }
+            .filter { it.isNotBlank() && !it.startsWith("-") }.distinct().take(6).toList()
+        return terms.joinToString(", ")
+    }
+
+    private fun examplePairs(stored: String): List<Pair<String, String>> = stored.lines().mapNotNull { line ->
+        val parts = line.split('\t', limit = 2)
+        val english = parts.firstOrNull()?.trim().orEmpty()
+        if (english.isBlank()) null else english to parts.getOrElse(1) { "" }.trim()
+    }
+
+    private fun displayExamples(stored: String): String = examplePairs(stored)
+        .joinToString("\n") { (en, ko) -> "$en\n$ko" }
 
     private fun naturalizeKorean(word: String, dictionaryGloss: String): String {
         // Add natural, sense-aware Korean glosses for common inflected forms whose
@@ -385,10 +416,9 @@ class MainActivity : Activity() {
         wordRow.addView(label(e.word, 25, true, dark), LinearLayout.LayoutParams(0, -2, 1f))
         wordRow.addView(button("🔊 듣기").apply { setOnClickListener { speak(e.word) } })
         card.addView(wordRow)
-        card.addView(label(e.ipa, 15, false, 0xff526174.toInt()).apply { setPadding(0, 4.dp(), 0, 12.dp()) })
         section(card, "한글 의미", e.korean)
         section(card, "English definition", e.english)
-        section(card, "예문", e.examples)
+        section(card, "예문 · 한국어 해석", displayExamples(e.examples))
         val credit = label("자료 출처: Open English-Korean Dictionary (CC BY-SA 4.0) · FreeDictionaryAPI.com / Wiktionary (CC BY-SA 4.0)", 10, false, 0xff64748b.toInt()).apply {
             setPadding(0, 12.dp(), 0, 0)
             setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://freedictionaryapi.com/"))) }
@@ -416,10 +446,10 @@ class MainActivity : Activity() {
         entries.forEach { e ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(14.dp(), 12.dp(), 8.dp(), 12.dp()); background = rounded(0xffffffff.toInt(), 14) }
             val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            info.addView(label("${e.word}  ${e.ipa}", 18, true, dark))
+            info.addView(label(e.word, 18, true, dark))
             info.addView(label(e.korean, 14, false, 0xff526174.toInt()).apply { maxLines = 2 })
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
-            row.addView(button("보기").apply { setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle(e.word).setMessage("${e.ipa}\n\n한글 의미\n${e.korean}\n\nEnglish definition\n${e.english}\n\n예문\n${e.examples}").setPositiveButton("닫기", null).show() } })
+            row.addView(button("보기").apply { setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle(e.word).setMessage("한글 의미\n${e.korean}\n\nEnglish definition\n${e.english}\n\n예문 · 한국어 해석\n${displayExamples(e.examples)}").setPositiveButton("닫기", null).show() } })
             row.addView(button("삭제").apply { setOnClickListener { db.delete(e.id); renderSaved() } })
             resultBox.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8.dp() })
         }
@@ -428,8 +458,13 @@ class MainActivity : Activity() {
     private fun createXlsx() {
         val entries = db.all()
         if (entries.isEmpty()) { toast("내보낼 저장 단어가 없습니다"); return }
-        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"; putExtra(Intent.EXTRA_TITLE, "영어단어장.xlsx") }
-        startActivityForResult(intent, 42)
+        val choices = arrayOf("단어·뜻·영어 예문(한글 해석 병기)", "한글 예문 해석 + 영어 예문", "영어 예문만")
+        AlertDialog.Builder(this).setTitle("엑셀 저장 형식").setItems(choices) { _, which ->
+            exportFormat = which + 1
+            val name = when (which) { 1 -> "영어예문_한영.xlsx"; 2 -> "영어예문.xlsx"; else -> "영어단어장.xlsx" }
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"; putExtra(Intent.EXTRA_TITLE, name) }
+            startActivityForResult(intent, 42)
+        }.setNegativeButton("취소", null).show()
     }
 
     @Deprecated("Activity result API kept compatible with platform-only project")
@@ -442,8 +477,17 @@ class MainActivity : Activity() {
     }
 
     private fun makeWorkbook(entries: List<WordEntry>): ByteArray {
-        val rows = mutableListOf(listOf("영단어", "한글 의미\nEnglish definition", "영어 예문"))
-        entries.forEach { rows += listOf("${it.word} ${it.ipa}".trim(), "${it.korean}\n${it.english}", it.examples) }
+        val rows = when (exportFormat) {
+            2 -> mutableListOf(listOf("예문 한글 해석", "영어 예문")).apply {
+                entries.forEach { e -> examplePairs(e.examples).forEach { add(listOf(it.second, it.first)) } }
+            }
+            3 -> mutableListOf(listOf("영어 예문")).apply {
+                entries.forEach { e -> examplePairs(e.examples).forEach { add(listOf(it.first)) } }
+            }
+            else -> mutableListOf(listOf("영단어", "한글 의미\nEnglish definition", "영어 예문 (한글 해석 병기)")).apply {
+                entries.forEach { e -> add(listOf(e.word, "${e.korean}\n${e.english}", displayExamples(e.examples))) }
+            }
+        }
         val sheet = buildString {
             append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><cols><col min=\"1\" max=\"1\" width=\"28\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"52\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"60\" customWidth=\"1\"/></cols><sheetData>")
             rows.forEachIndexed { ri, row -> append("<row r=\"${ri + 1}\" ht=\"42\" customHeight=\"1\">"); row.forEachIndexed { ci, value -> val ref = "${'A' + ci}${ri + 1}"; append("<c r=\"$ref\" s=\"1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">${xml(value)}</t></is></c>") }; append("</row>") }
