@@ -33,7 +33,7 @@ jobs:
             https://raw.githubusercontent.com/jhseo1211/open-english-korean-dict/92cbfe63deee1ccead2c42677027d8b4a305b2c7/dict/word_dictionary.sqlite \
             --output app/src/main/assets/word_dictionary.sqlite
       - name: Build APK
-        run: gradle :app:assembleDebug
+        run: gradle :app:testDebugUnitTest :app:assembleDebug
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -58,5 +58,5 @@ jobs:
           if gh release view "$RELEASE_VERSION" >/dev/null 2>&1; then
             gh release upload "$RELEASE_VERSION" "$APK_NAME" --clobber
           else
-            gh release create "$RELEASE_VERSION" "$APK_NAME" --title "사전앱 $RELEASE_VERSION" --generate-notes --target "$GITHUB_SHA"
+            gh release create "$RELEASE_VERSION" "$APK_NAME" --title "영어단어장 $RELEASE_VERSION" --generate-notes --target "$GITHUB_SHA"
           fi

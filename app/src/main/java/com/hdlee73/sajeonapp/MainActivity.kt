@@ -1,5 +1,11 @@
 package com.hdlee73.sajeonapp
 
+import com.google.android.gms.tasks.Tasks
+import com.google.mlkit.common.model.DownloadConditions
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
+import java.util.concurrent.TimeUnit
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentValues
@@ -73,6 +79,12 @@ class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 
 }
 
 class MainActivity : Activity() {
+    private val translator by lazy {
+        Translation.getClient(TranslatorOptions.Builder()
+            .setSourceLanguage(TranslateLanguage.ENGLISH)
+            .setTargetLanguage(TranslateLanguage.KOREAN).build())
+    }
+    private var translationModelReady = false
     private val io = Executors.newSingleThreadExecutor()
     private val lookupSequence = AtomicInteger(0)
     private val resultCache = mutableMapOf<String, WordEntry>()
@@ -140,8 +152,7 @@ class MainActivity : Activity() {
         returnButton = button("← PDF로 돌아가기").apply { visibility = if (returnToPdf) View.VISIBLE else View.GONE; setOnClickListener { finish() } }
         root.addView(returnButton, LinearLayout.LayoutParams(-1, 46.dp()).apply { bottomMargin = 10.dp() })
         val hero = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 18.dp(), 20.dp(), 18.dp()); background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR, intArrayOf(0xff142949.toInt(), 0xff294c79.toInt())).apply { cornerRadius = 22.dp().toFloat() } }
-        hero.addView(label("LEXI  ·  단어장", 25, true, 0xffffffff.toInt()))
-        hero.addView(label("영어 표현을 찾고, 듣고, 내 단어로 저장하세요", 14, false, 0xffdce8f6.toInt()).apply { setPadding(0, 5.dp(), 0, 0) })
+        hero.addView(label("영어단어장", 25, true, 0xffffffff.toInt()))
         root.addView(hero, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 14.dp() })
         val searchCard = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp()); background = rounded(0xffffffff.toInt(), 17) }
         searchInput = EditText(this).apply { hint = "단어, 숙어 또는 구동사"; setSingleLine(true); textSize = 16f; setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp()); background = android.graphics.drawable.ColorDrawable(0x00000000); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
@@ -185,9 +196,20 @@ class MainActivity : Activity() {
             return
         }
         io.execute {
+            ReviewedEntries.lookup(q)?.let { reviewed ->
+                synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = reviewed }
+                runOnUiThread {
+                    if (requestId != lookupSequence.get()) return@runOnUiThread
+                    current = reviewed
+                    status.text = "검색 결과 · 의미별 풀이"
+                    resultBox.removeAllViews()
+                    showEntry(reviewed, true)
+                }
+                return@execute
+            }
             val local = glossary.lookup(q)
             if (requestId != lookupSequence.get()) return@execute
-            if (local != null) {
+            if (local != null && !q.contains(' ')) {
                 val initial = WordEntry(
                     word = q,
                     ipa = "",
@@ -200,27 +222,33 @@ class MainActivity : Activity() {
                     current = initial
                     status.text = "한글 뜻 표시됨 · 예문을 불러오는 중…"
                     resultBox.removeAllViews()
-                    showEntry(initial, true)
+                    showEntry(initial, false)
                 }
             }
             try {
                 val online = fetchDictionary(q)
-                val korean = local?.let { naturalizeKorean(q, it.korean) }?.takeIf { it.isNotBlank() }
-                    ?: (try { koreanDictionaryMeaning(q) } catch (_: Exception) { "" }).ifBlank {
-                        try { translate(q) } catch (_: Exception) {
-                            try { translate(online.first.substringAfter(". ").lineSequence().first()) }
-                            catch (_: Exception) { "한국어 뜻을 불러오지 못했습니다. 인터넷 연결 후 다시 검색해 주세요." }
-                        }
-                    }
+                // Translate the dictionary's senses, never the bare search phrase.
+                // A translation such as "페이 오프" must not masquerade as a definition.
+                val korean = local?.korean?.trim()?.takeIf { it.isNotBlank() && !q.contains(' ') } ?: try {
+                    online.first.lines().filter { it.isNotBlank() }.mapIndexed { index, definition ->
+                        val meaning = definition.replace(Regex("^\\d+\\.\\s*"), "")
+                        "${index + 1}. ${translate(meaning)}"
+                    }.joinToString("\n") + "\n(영문 사전 정의의 한국어 번역)"
+                } catch (_: Exception) {
+                    local?.korean?.takeIf { it.isNotBlank() && !q.contains(' ') }
+                        ?: "한국어 풀이를 불러오지 못했습니다. 연결 후 다시 검색해 주세요."
+                }
                 val sentences = online.third.split("\n").map { it.trim() }
                     .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
                     .distinct().ifEmpty { listOf(fallbackExample(q)) }.take(2)
                 val bilingual = sentences.map { sentence ->
-                    val ko = try { translate(sentence) } catch (_: Exception) { "" }
+                    val ko = if (sentence == fallbackExample(q)) "오늘 대화에서 “$q”라는 표현을 들었습니다." else try { translate(sentence) } catch (_: Exception) { "" }
                     if (ko.isBlank()) "$sentence\t(해석을 불러오지 못했습니다)" else "$sentence\t$ko"
                 }.joinToString("\n")
                 val entry = WordEntry(word = q, ipa = "", korean = korean, english = online.first, examples = bilingual)
-                synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
+                if (!korean.contains("불러오지 못") && !bilingual.contains("불러오지 못")) {
+                    synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
+                }
                 runOnUiThread {
                     if (requestId != lookupSequence.get()) return@runOnUiThread
                     current = entry
@@ -229,10 +257,10 @@ class MainActivity : Activity() {
                     showEntry(entry, true)
                 }
             } catch (e: Exception) {
-                if (local != null) {
+                if (local != null && !q.contains(' ')) {
                     runOnUiThread {
                         if (requestId != lookupSequence.get()) return@runOnUiThread
-                        status.text = "한글 뜻은 표시했습니다. 발음과 예문은 연결 후 다시 불러올 수 있어요."
+                        status.text = "저장된 사전 뜻을 표시했습니다. 영문 풀이와 예문은 연결 후 다시 검색해 주세요."
                     }
                 } else {
                     val suggestions = try { fetchSuggestions(q) } catch (_: Exception) { emptyList() }
@@ -396,10 +424,17 @@ class MainActivity : Activity() {
     }
 
     private fun translate(text: String): String {
-        val q = URLEncoder.encode(text.take(900), "UTF-8")
-        val response = JSONObject(http("https://api.mymemory.translated.net/get?q=$q&langpair=en%7Cko", 2500, 3500))
-        val translated = response.optJSONObject("responseData")?.optString("translatedText", "")?.trim().orEmpty()
-        if (translated.isBlank()) throw IllegalStateException("번역 결과가 없습니다")
+        if (!translationModelReady) {
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) status.text = "한국어 번역 준비 중… 최초 사용 시 번역 모델을 내려받습니다."
+            }
+            Tasks.await(translator.downloadModelIfNeeded(DownloadConditions.Builder().build()), 90, TimeUnit.SECONDS)
+            translationModelReady = true
+        }
+        val translated = Tasks.await(translator.translate(text), 20, TimeUnit.SECONDS).trim()
+        if (translated.isBlank() || !translated.any { it in '가'..'힣' }) {
+            throw IllegalStateException("한국어 번역 결과가 없습니다")
+        }
         return translated
     }
 
@@ -419,7 +454,7 @@ class MainActivity : Activity() {
         section(card, "한글 의미", e.korean)
         section(card, "English definition", e.english)
         section(card, "예문 · 한국어 해석", displayExamples(e.examples))
-        val credit = label("자료 출처: Open English-Korean Dictionary (CC BY-SA 4.0) · FreeDictionaryAPI.com / Wiktionary (CC BY-SA 4.0)", 10, false, 0xff64748b.toInt()).apply {
+        val credit = label("풀이·예문: 의미별 자체 정리 / Open English-Korean Dictionary / FreeDictionaryAPI · Wiktionary (CC BY-SA 4.0). 일반 예문 해석: Google ML Kit 자동 번역.", 10, false, 0xff64748b.toInt()).apply {
             setPadding(0, 12.dp(), 0, 0)
             setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://freedictionaryapi.com/"))) }
         }
@@ -450,6 +485,7 @@ class MainActivity : Activity() {
             info.addView(label(e.korean, 14, false, 0xff526174.toInt()).apply { maxLines = 2 })
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
             row.addView(button("보기").apply { setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle(e.word).setMessage("한글 의미\n${e.korean}\n\nEnglish definition\n${e.english}\n\n예문 · 한국어 해석\n${displayExamples(e.examples)}").setPositiveButton("닫기", null).show() } })
+            row.addView(button("다시 검색").apply { setOnClickListener { searchInput.setText(e.word); lookup(e.word) } })
             row.addView(button("삭제").apply { setOnClickListener { db.delete(e.id); renderSaved() } })
             resultBox.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8.dp() })
         }
@@ -515,6 +551,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         tts?.stop()
         tts?.shutdown()
+        io.execute { translator.close() }
         io.shutdown()
         super.onDestroy()
     }
