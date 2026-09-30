@@ -36,3 +36,15 @@ The workflow now requires the repository Actions secret `ANDROID_DEBUG_KEYSTORE_
 The workflow fails before building/publishing if the secret is absent instead of silently generating an incompatible signing key. A newly created key will not fix compatibility with already installed versions signed with lost keys.
 
 Do not uninstall an existing installation before exporting saved vocabulary. The current Excel export is a backup for viewing the words; it does not automatically restore them into the app.
+
+## v1.5.0 dictionary data correction
+
+The earlier merged dictionary is no longer bundled. The build script constructs an exact English-equivalent reverse index from the National Institute of Korean Language Korean Basic Dictionary's January 2024 export. Korean headwords and native Korean definitions are preserved; this is a reverse index of a Korean-English dictionary, not Naver data or an exhaustive English-Korean dictionary. No machine-translated English definition is displayed as a Korean dictionary meaning. Missing Korean entries are explicitly marked and a Naver English-Korean search link is provided.
+
+The generated index contains 48,488 English headwords/expressions. 6,392 human bilingual sentence pairs from the ManyThings/Tatoeba corpus are indexed by complete word or phrase. Contributor names and sentence IDs are retained in the app, saved entries, and an additional Sources worksheet in all three Excel export formats. Corpus coverage and sense alignment are not universal. Where a human pair is unavailable, external dictionary examples use explicitly attributed automatic translations. A generic quotation example, if necessary, is labelled as a sentence mentioning the expression.
+
+Spontaneous is separately reviewed with distinct senses and three original usage examples with natural Korean translations. The new dictionary has a separate installed filename so older copied database contents cannot survive an app update. The user's saved word database is migrated without deleting words.
+
+Data source and licenses: app/src/main/assets/DATA_SOURCES.txt. NIKL-derived data: CC BY-SA 2.0 KR. Tatoeba sentence pairs: CC BY 2.0 France. Build script and all generated adaptations are available in this repository.
+
+Ordinary pushes run data validation and unit tests without requiring a signing key or publishing an ephemeral-key APK. APK publication still requires the fixed signing key configured after the update-signature issue.

@@ -7,6 +7,10 @@ internal object ReviewedEntries {
     private fun entry(word: String, korean: String, english: String, examples: String) =
         WordEntry(word = word, ipa = "", korean = korean, english = english, examples = examples)
     private val entries = listOf(
+        entry("spontaneous",
+            "[형용사]\n1. (계획하지 않고) 즉흥적인\n2. (강요받지 않고) 자발적인, 스스로 우러나오는\n3. (반응·과정 등이) 외부 작용 없이 저절로 일어나는, 자연 발생적인",
+            "1. Done without advance planning.\n2. Arising from a person's own willingness or feelings.\n3. Occurring without an external cause.",
+            "We made a spontaneous decision to spend the weekend at the beach.\t우리는 즉흥적으로 주말을 바닷가에서 보내기로 했다.\nHer kind words brought a spontaneous smile to his face.\t그녀의 다정한 말에 그의 얼굴에 저절로 미소가 번졌다.\nThe audience broke into spontaneous applause.\t관객들이 자연스럽게 박수를 터뜨렸다."),
         entry("pay off",
             "1. (빚·대출 등을) 전액 갚다, 청산하다\n2. (노력·투자 등이) 성과를 내다, 보람이 있다\n3. (누군가에게) 뇌물을 주어 매수하다\n4. (직원에게) 정산금을 주고 해고하다",
             "1. To repay a debt in full.\n2. To produce a worthwhile result.\n3. To bribe someone.\n4. To pay an employee what is owed and dismiss them.",
@@ -25,4 +29,3 @@ internal object ReviewedEntries {
     ).associateBy { it.word }
     fun lookup(query: String): WordEntry? = entries[query.trim().lowercase(Locale.ROOT).replace(Regex("\\s+"), " ")]
 }
-

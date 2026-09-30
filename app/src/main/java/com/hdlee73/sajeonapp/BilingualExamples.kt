@@ -1,0 +1,43 @@
+package com.hdlee73.sajeonapp
+
+import android.app.Activity
+import android.database.sqlite.SQLiteDatabase
+import java.util.Locale
+
+internal data class BilingualSentence(val english: String, val korean: String, val credit: String)
+
+internal object UsageMatcher {
+    fun contains(sentence: String, query: String): Boolean {
+        val words = query.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (words.isEmpty()) return false
+        val pattern = words.joinToString("\\s+") { Regex.escape(it) }
+        return Regex("(?<![A-Za-z])$pattern(?![A-Za-z])", RegexOption.IGNORE_CASE).containsMatchIn(sentence)
+    }
+}
+
+internal class BilingualExamples(private val activity: Activity) {
+    private var database: SQLiteDatabase? = null
+    fun lookup(query: String): List<BilingualSentence> {
+        return try {
+            if (database == null) {
+                val file = activity.getDatabasePath("bilingual_examples_v1.sqlite")
+                if (!file.exists()) {
+                    file.parentFile?.mkdirs()
+                    activity.assets.open("bilingual_examples.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
+                }
+                database = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY)
+            }
+            val token = Regex("[a-z]+(?:'[a-z]+)?").find(query.lowercase(Locale.ROOT))?.value ?: return emptyList()
+            val matches = mutableListOf<BilingualSentence>()
+            database!!.rawQuery("SELECT e.english,e.korean,e.credit FROM examples e JOIN tokens t ON t.example_id=e.id WHERE t.token=? AND length(e.english)>=18 ORDER BY length(e.english),e.id LIMIT 500", arrayOf(token)).use { c ->
+                while (c.moveToNext() && matches.size < 2) {
+                    val en = c.getString(0)
+                    if (UsageMatcher.contains(en, query) && matches.none { it.english == en }) {
+                        matches += BilingualSentence(en, c.getString(1), c.getString(2))
+                    }
+                }
+            }
+            matches
+        } catch (_: Exception) { emptyList() }
+    }
+}

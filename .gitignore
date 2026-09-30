@@ -1,6 +1,7 @@
+.learning_data/
+app/src/main/assets/word_dictionary.sqlite
+app/src/main/assets/bilingual_examples.sqlite
+app/build/
+build/
 .gradle/
 local.properties
-.idea/
-build/
-app/build/
-*.iml

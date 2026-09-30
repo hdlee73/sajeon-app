@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-data class WordEntry(val id: Long = 0, val word: String, val ipa: String, val korean: String, val english: String, val examples: String)
+data class WordEntry(val id: Long = 0, val word: String, val ipa: String, val korean: String, val english: String, val examples: String, val source: String = "")
 private data class LocalMeaning(val korean: String, val english: String, val ipa: String)
 
 private class LocalGlossary(private val activity: Activity) {
@@ -41,7 +41,7 @@ private class LocalGlossary(private val activity: Activity) {
     @Synchronized private fun open(): SQLiteDatabase? {
         database?.let { return it }
         return try {
-            val file = activity.getDatabasePath("meaning_dictionary.sqlite")
+            val file = activity.getDatabasePath("meaning_dictionary_nikl_v1.sqlite")
             if (!file.exists()) {
                 file.parentFile?.mkdirs()
                 activity.assets.open("word_dictionary.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
@@ -59,20 +59,23 @@ private class LocalGlossary(private val activity: Activity) {
     }
 }
 
-class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 2) {
+class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL UNIQUE COLLATE NOCASE, ipa TEXT, korean TEXT, english TEXT, examples TEXT)")
+        db.execSQL("CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL UNIQUE COLLATE NOCASE, ipa TEXT, korean TEXT, english TEXT, examples TEXT, source TEXT DEFAULT '')")
     }
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) { if (oldVersion < 2) db.execSQL("UPDATE entries SET ipa=''") }
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 2) db.execSQL("UPDATE entries SET ipa=''")
+        if (oldVersion < 3) db.execSQL("ALTER TABLE entries ADD COLUMN source TEXT DEFAULT ''")
+    }
     fun all(): List<WordEntry> {
         val out = mutableListOf<WordEntry>()
-        readableDatabase.rawQuery("SELECT id,word,ipa,korean,english,examples FROM entries ORDER BY word COLLATE NOCASE", null).use { c ->
-            while (c.moveToNext()) out += WordEntry(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getString(5))
+        readableDatabase.rawQuery("SELECT id,word,ipa,korean,english,examples,source FROM entries ORDER BY word COLLATE NOCASE", null).use { c ->
+            while (c.moveToNext()) out += WordEntry(c.getLong(0), c.getString(1), c.getString(2), c.getString(3), c.getString(4), c.getString(5), c.getString(6).orEmpty())
         }
         return out
     }
     fun save(e: WordEntry): Boolean {
-        val v = ContentValues().apply { put("word", e.word); put("ipa", ""); put("korean", e.korean); put("english", e.english); put("examples", e.examples) }
+        val v = ContentValues().apply { put("word", e.word); put("ipa", ""); put("korean", e.korean); put("english", e.english); put("examples", e.examples); put("source", e.source) }
         return writableDatabase.insertWithOnConflict("entries", null, v, SQLiteDatabase.CONFLICT_REPLACE) >= 0
     }
     fun delete(id: Long) { writableDatabase.delete("entries", "id=?", arrayOf(id.toString())) }
@@ -88,6 +91,7 @@ class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
     private val lookupSequence = AtomicInteger(0)
     private val resultCache = mutableMapOf<String, WordEntry>()
+    private lateinit var exampleCorpus: BilingualExamples
     private lateinit var glossary: LocalGlossary
     private lateinit var db: EntryDb
     private lateinit var resultBox: LinearLayout
@@ -107,6 +111,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         db = EntryDb(this)
         glossary = LocalGlossary(this)
+        exampleCorpus = BilingualExamples(this)
         returnToPdf = intent?.getBooleanExtra("return_to_pdf", false) == true
         buildUi()
         tts = TextToSpeech(this) { result ->
@@ -181,13 +186,14 @@ class MainActivity : Activity() {
         if (q.isNotEmpty()) lookup(q) else toast("검색어를 입력해 주세요")
     }
 
-    private fun showPage() { if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, false) } } }
+    private fun showPage() { if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
 
     private fun lookup(q: String) {
         val requestId = lookupSequence.incrementAndGet()
         status.text = "‘$q’ 검색 중…"
         resultBox.removeAllViews()
         showSaved = false
+        current = null
         val cached = synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] }
         if (cached != null) {
             current = cached
@@ -208,14 +214,31 @@ class MainActivity : Activity() {
                 return@execute
             }
             val local = glossary.lookup(q)
+            val humanExamples = exampleCorpus.lookup(q)
             if (requestId != lookupSequence.get()) return@execute
-            if (local != null && !q.contains(' ')) {
+            if (local != null && local.english.isNotBlank() && humanExamples.isNotEmpty()) {
+                val complete = WordEntry(word = q, ipa = "", korean = local.korean,
+                    english = local.english, examples = humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" },
+                    source = "한국어 풀이: 국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR).\n" +
+                        humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba")
+                synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = complete }
+                runOnUiThread {
+                    if (requestId != lookupSequence.get()) return@runOnUiThread
+                    current = complete
+                    status.text = "검색 결과 · 사전 뜻풀이 / 한영 예문"
+                    resultBox.removeAllViews()
+                    showEntry(complete, true)
+                }
+                return@execute
+            }
+            if (local != null) {
                 val initial = WordEntry(
                     word = q,
                     ipa = "",
                     korean = naturalizeKorean(q, local.korean),
                     english = local.english.ifBlank { "영어 풀이를 불러오는 중…" },
-                    examples = bilingualFallbackExample(q)
+                    examples = bilingualFallbackExample(q),
+                    source = "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)"
                 )
                 runOnUiThread {
                     if (requestId != lookupSequence.get()) return@runOnUiThread
@@ -227,17 +250,9 @@ class MainActivity : Activity() {
             }
             try {
                 val online = fetchDictionary(q)
-                // Translate the dictionary's senses, never the bare search phrase.
-                // A translation such as "페이 오프" must not masquerade as a definition.
-                val korean = local?.korean?.trim()?.takeIf { it.isNotBlank() && !q.contains(' ') } ?: try {
-                    online.first.lines().filter { it.isNotBlank() }.mapIndexed { index, definition ->
-                        val meaning = definition.replace(Regex("^\\d+\\.\\s*"), "")
-                        "${index + 1}. ${translate(meaning)}"
-                    }.joinToString("\n") + "\n(영문 사전 정의의 한국어 번역)"
-                } catch (_: Exception) {
-                    local?.korean?.takeIf { it.isNotBlank() && !q.contains(' ') }
-                        ?: "한국어 풀이를 불러오지 못했습니다. 연결 후 다시 검색해 주세요."
-                }
+                // Korean meanings must be dictionary records, never machine-translated definitions.
+                val korean = local?.korean?.takeIf { it.isNotBlank() }
+                    ?: "등록된 영한 뜻풀이가 없습니다. 아래 네이버 사전에서 확인해 주세요."
                 val sentences = online.third.split("\n").map { it.trim() }
                     .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
                     .distinct().ifEmpty { listOf(fallbackExample(q)) }.take(2)
@@ -245,7 +260,10 @@ class MainActivity : Activity() {
                     val ko = if (sentence == fallbackExample(q)) "오늘 대화에서 “$q”라는 표현을 들었습니다." else try { translate(sentence) } catch (_: Exception) { "" }
                     if (ko.isBlank()) "$sentence\t(해석을 불러오지 못했습니다)" else "$sentence\t$ko"
                 }.joinToString("\n")
-                val entry = WordEntry(word = q, ipa = "", korean = korean, english = online.first, examples = bilingual)
+                val entry = WordEntry(word = q, ipa = "", korean = korean,
+                    english = local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
+                    source = (if (local != null) "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)" else "FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)") +
+                        "\n일반 예문 해석: Google ML Kit 자동 번역")
                 if (!korean.contains("불러오지 못") && !bilingual.contains("불러오지 못")) {
                     synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
                 }
@@ -257,7 +275,7 @@ class MainActivity : Activity() {
                     showEntry(entry, true)
                 }
             } catch (e: Exception) {
-                if (local != null && !q.contains(' ')) {
+                if (local != null) {
                     runOnUiThread {
                         if (requestId != lookupSequence.get()) return@runOnUiThread
                         status.text = "저장된 사전 뜻을 표시했습니다. 영문 풀이와 예문은 연결 후 다시 검색해 주세요."
@@ -395,16 +413,6 @@ class MainActivity : Activity() {
     private fun bilingualFallbackExample(word: String): String =
         "${fallbackExample(word)}\t오늘 대화에서 “$word”라는 표현을 들었습니다."
 
-    private fun koreanDictionaryMeaning(word: String): String {
-        val page = URLEncoder.encode(word.replace(' ', '_'), "UTF-8")
-        val json = JSONObject(http("https://en.wiktionary.org/w/api.php?action=parse&page=$page&prop=wikitext&format=json&redirects=1", 2500, 3500))
-        val text = json.optJSONObject("parse")?.optJSONObject("wikitext")?.optString("*", "").orEmpty()
-        val terms = Regex("\\{\\{t(?:\\+|-)?\\|ko\\|([^|}]+)")
-            .findAll(text).map { it.groupValues[1].replace("_", " ").trim() }
-            .filter { it.isNotBlank() && !it.startsWith("-") }.distinct().take(6).toList()
-        return terms.joinToString(", ")
-    }
-
     private fun examplePairs(stored: String): List<Pair<String, String>> = stored.lines().mapNotNull { line ->
         val parts = line.split('\t', limit = 2)
         val english = parts.firstOrNull()?.trim().orEmpty()
@@ -452,11 +460,14 @@ class MainActivity : Activity() {
         wordRow.addView(button("🔊 듣기").apply { setOnClickListener { speak(e.word) } })
         card.addView(wordRow)
         section(card, "한글 의미", e.korean)
+        card.addView(button("네이버 영한사전").apply { setOnClickListener {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://en.dict.naver.com/#/search?query=" + Uri.encode(e.word))))
+        } }, LinearLayout.LayoutParams(-1, 42.dp()).apply { topMargin = 8.dp() })
         section(card, "English definition", e.english)
-        section(card, "예문 · 한국어 해석", displayExamples(e.examples))
-        val credit = label("풀이·예문: 의미별 자체 정리 / Open English-Korean Dictionary / FreeDictionaryAPI · Wiktionary (CC BY-SA 4.0). 일반 예문 해석: Google ML Kit 자동 번역.", 10, false, 0xff64748b.toInt()).apply {
+        section(card, if (e.examples == bilingualFallbackExample(e.word)) "표현을 언급하는 예문" else "예문 · 한국어 해석", displayExamples(e.examples))
+        val credit = label(e.source.ifBlank { "의미별 자체 정리 · 직접 작성한 한영 예문" }, 10, false, 0xff64748b.toInt()).apply {
             setPadding(0, 12.dp(), 0, 0)
-            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://freedictionaryapi.com/"))) }
+            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://krdict.korean.go.kr/eng/mainAction"))) }
         }
         card.addView(credit)
         if (canSave) {
@@ -529,14 +540,17 @@ class MainActivity : Activity() {
             rows.forEachIndexed { ri, row -> append("<row r=\"${ri + 1}\" ht=\"42\" customHeight=\"1\">"); row.forEachIndexed { ci, value -> val ref = "${'A' + ci}${ri + 1}"; append("<c r=\"$ref\" s=\"1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">${xml(value)}</t></is></c>") }; append("</row>") }
             append("</sheetData></worksheet>")
         }
+        val attribution = entries.map { it.source.ifBlank { "의미별 자체 정리 · 직접 작성한 한영 예문" } }.distinct()
+        val sourceSheet = """<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>""" + attribution.mapIndexed { i, credit -> """<row r="${i + 1}"><c r="A${i + 1}" t="inlineStr"><is><t>${xml(credit)}</t></is></c></row>""" }.joinToString("") + "</sheetData></worksheet>"
         val out = ByteArrayOutputStream(); ZipOutputStream(out).use { z ->
             fun put(path: String, value: String) { z.putNextEntry(ZipEntry(path)); z.write(value.toByteArray(Charsets.UTF_8)); z.closeEntry() }
-            put("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/></Types>")
+            put("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/><Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/></Types>")
             put("_rels/.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>")
-            put("xl/workbook.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"단어장\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>")
-            put("xl/_rels/workbook.xml.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/></Relationships>")
+            put("xl/workbook.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"단어장\" sheetId=\"1\" r:id=\"rId1\"/><sheet name=\"출처\" sheetId=\"2\" r:id=\"rId3\"/></sheets></workbook>")
+            put("xl/_rels/workbook.xml.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/></Relationships>")
             put("xl/styles.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Arial\"/></font></fonts><fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills><borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"2\"><xf xfId=\"0\"/><xf xfId=\"0\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf></cellXfs></styleSheet>")
             put("xl/worksheets/sheet1.xml", sheet)
+            put("xl/worksheets/sheet2.xml", sourceSheet)
         }; return out.toByteArray()
     }
 
@@ -549,6 +563,7 @@ class MainActivity : Activity() {
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
+        lookupSequence.incrementAndGet()
         tts?.stop()
         tts?.shutdown()
         io.execute { translator.close() }
