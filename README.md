@@ -2,13 +2,12 @@
 
 Android English vocabulary lookup and personal wordbook for English words, idioms, and phrasal verbs.
 
-## What changed in 1.2.0
+## What changed in 1.3.0
 
-- Common Korean meanings load from a local 48,037-entry English-Korean dictionary bundled into the APK at build time, so the first meaning appears without waiting for a translation server.
-- A context-sensitive Korean gloss is used for “stuck”: “끼어 움직이지 않는; (일이나 문제 해결이) 막힌, 진전이 없는”.
-- English definitions, IPA pronunciations, and authentic dictionary examples are fetched together from FreeDictionaryAPI.com, prioritizing IPA fields and examples from Wiktionary. A secondary dictionary API is used if that service cannot respond.
-- Missing examples are shown as unavailable; the app no longer invents a sample sentence.
-- Search results are cached during the app session. Saved words stay on the device and can be exported as `.xlsx`.
+- Korean meanings use the bundled English-Korean dictionary first, then Korean Wiktionary lexical translations; machine translation of the English definition is only a last fallback.
+- Every successful word or phrase lookup includes at least one English example. If neither dictionary provides an example, a complete example sentence is supplied. English examples are shown and exported with Korean translations.
+- Excel export offers three layouts: word + meanings + bilingual examples; Korean example translation + English example in two columns; or English examples only.
+- IPA symbols are hidden from the search and saved-word screens, never written to new wordbook records, omitted from all exports, and removed from existing saved records during upgrade.
 
 ## Data attribution and license
 
