@@ -18,7 +18,7 @@ class StudyMeaningsTest {
     }
     @Test fun normalizesBothLanguagesBeforeSaveAndExport() {
         val e = WordEntry(word="test", ipa="", korean=(1..6).joinToString("\n") { "$it. 의미" },
-            english=(1..6).joinToString("\n") { "$it. meaning" }, examples="An example.\t예문")
+            english=(1..6).joinToString("\n") { "$it. meaning" }, examples="This is an example.\t예문")
         assertEquals(4, e.studyVersion().korean.lines().size)
         assertEquals(4, e.studyVersion().english.lines().size)
         assertEquals(e.examples, e.studyVersion().examples)

@@ -41,7 +41,7 @@ private class LocalGlossary(private val activity: Activity) {
     @Synchronized private fun open(): SQLiteDatabase? {
         database?.let { return it }
         return try {
-            val file = activity.getDatabasePath("meaning_dictionary_nikl_v1.sqlite")
+            val file = activity.getDatabasePath("meaning_dictionary_nikl_v2.sqlite")
             if (!file.exists()) {
                 file.parentFile?.mkdirs()
                 activity.assets.open("word_dictionary.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
@@ -377,7 +377,7 @@ class MainActivity : Activity() {
         val samples = useful.flatMap { sense ->
             val examples = sense.optJSONArray("examples") ?: JSONArray()
             (0 until examples.length()).mapNotNull { examples.optString(it).trim().takeIf(String::isNotBlank) }
-        }.distinct().take(3)
+        }.filter { SentenceExamples.isSentence(it) }.distinct().take(3)
         val english = definitions.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
         val examples = if (samples.isEmpty()) fallbackExample(q) else samples.joinToString("\n")
         return Triple(english, ipa, examples)
@@ -394,7 +394,7 @@ class MainActivity : Activity() {
             for (j in 0 until defs.length()) {
                 val item = defs.optJSONObject(j) ?: continue
                 item.optString("definition").takeIf(String::isNotBlank)?.let(definitions::add)
-                item.optString("example").takeIf(String::isNotBlank)?.let(samples::add)
+                item.optString("example").takeIf { SentenceExamples.isSentence(it) }?.let(samples::add)
             }
         }
         if (definitions.isEmpty()) throw IllegalStateException("정의를 찾지 못했습니다")
@@ -417,7 +417,7 @@ class MainActivity : Activity() {
     private fun examplePairs(stored: String): List<Pair<String, String>> = stored.lines().mapNotNull { line ->
         val parts = line.split('\t', limit = 2)
         val english = parts.firstOrNull()?.trim().orEmpty()
-        if (english.isBlank()) null else english to parts.getOrElse(1) { "" }.trim()
+        if (!SentenceExamples.isSentence(english)) null else english to parts.getOrElse(1) { "" }.trim()
     }
 
     private fun displayExamples(stored: String): String = examplePairs(stored)
@@ -462,9 +462,19 @@ class MainActivity : Activity() {
         wordRow.addView(button("🔊 듣기").apply { setOnClickListener { speak(e.word) } })
         card.addView(wordRow)
         section(card, "한글 의미", e.korean)
-        card.addView(button("네이버 사전에서 더 보기 ↗").apply { setOnClickListener {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://en.dict.naver.com/#/search?query=" + Uri.encode(e.word))))
-        } }, LinearLayout.LayoutParams(-1, 42.dp()).apply { topMargin = 8.dp() })
+        val dictionaryLinks = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        dictionaryLinks.addView(label("네이버 ", 12, false, 0xff64748b.toInt()))
+        fun addDictionaryLink(title: String, address: String) {
+            dictionaryLinks.addView(label(title, 12, false, blue).apply {
+                paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+                setPadding(4.dp(), 8.dp(), 4.dp(), 8.dp())
+                setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(address + Uri.encode(e.word)))) }
+            })
+        }
+        addDictionaryLink("영한", "https://en.dict.naver.com/#/search?query=")
+        dictionaryLinks.addView(label(" · ", 12, false, 0xff64748b.toInt()))
+        addDictionaryLink("영영", "https://dict.naver.com/enendict/#/search?query=")
+        card.addView(dictionaryLinks)
         section(card, "English definition", e.english)
         section(card, if (e.examples == bilingualFallbackExample(e.word)) "표현을 언급하는 예문" else "예문 · 한국어 해석", displayExamples(e.examples))
         val credit = label(e.source.ifBlank { "의미별 자체 정리 · 직접 작성한 한영 예문" }, 10, false, 0xff64748b.toInt()).apply {

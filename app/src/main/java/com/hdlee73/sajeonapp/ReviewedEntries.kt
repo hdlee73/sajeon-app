@@ -5,7 +5,7 @@ import java.util.Locale
 /** Sense-based entries and original example translations. No phonetic glosses. */
 internal object ReviewedEntries {
     private fun entry(word: String, korean: String, english: String, examples: String) =
-        WordEntry(word = word, ipa = "", korean = korean, english = english, examples = examples)
+        WordEntry(word = word, ipa = "", korean = if (korean.startsWith("[")) korean else (if (word == "stuck") "[형용사]\n" else "[구동사]\n") + korean, english = english, examples = examples)
     private val entries = listOf(
         entry("spontaneous",
             "[형용사]\n1. (계획하지 않고) 즉흥적인\n2. (강요받지 않고) 자발적인, 스스로 우러나오는\n3. (반응·과정 등이) 외부 작용 없이 저절로 일어나는, 자연 발생적인",

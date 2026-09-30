@@ -54,6 +54,7 @@ def build_dictionary(paths, destination):
         for entry in entries:
             lemmas = as_list(entry.get('Lemma'))
             head = next((features(lemma.get('feat')).get('writtenForm', '') for lemma in lemmas), '')
+            pos = features(entry.get('feat')).get('partOfSpeech', '').strip()
             for sense in as_list(entry.get('Sense')):
                 korean = features(sense.get('feat')).get('definition', '').strip()
                 if not head or not korean:
@@ -68,7 +69,7 @@ def build_dictionary(paths, destination):
                         if not re.fullmatch(r"[a-z][a-z '\-]*", lemma):
                             continue
                         # Exact translated headwords only; no synonym inference.
-                        item = (f'{head}: {korean}', english)
+                        item = (f'[{pos}] {head}: {korean}' if pos else f'{head}: {korean}', english)
                         if item not in records.setdefault(lemma, []):
                             records[lemma].append(item)
         del entries
