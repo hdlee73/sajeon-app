@@ -5,8 +5,12 @@ import java.util.Locale
 /** Sense-based entries and original example translations. No phonetic glosses. */
 internal object ReviewedEntries {
     private fun entry(word: String, korean: String, english: String, examples: String) =
-        WordEntry(word = word, ipa = "", korean = if (korean.startsWith("[")) korean else (if (word == "stuck") "[형용사]\n" else "[구동사]\n") + korean, english = english, examples = examples)
+        WordEntry(word = word, ipa = "", korean = if (korean.startsWith("[") || korean.contains("[형용사]")) korean else (if (word == "stuck") "[형용사]\n" else "[구동사]\n") + korean, english = english, examples = examples)
     private val entries = listOf(
+        entry("catch up",
+            "1. (앞서가는 사람·수준 등을) 따라잡다\n2. (밀린 일·공부 등을) 따라 하다, 밀린 일을 처리하다\n3. (오랜만에 만나) 그동안의 소식을 나누다\n4. (소식·상황 등을) 알아보다, 최신 정보를 파악하다",
+            "1. To reach someone or the same level after falling behind.\n2. To do work that should have been done earlier.\n3. To talk with someone about what has happened since you last met.\n4. To learn about recent events or developments.",
+            "I ran faster to catch up with the others.\t다른 사람들을 따라잡으려고 더 빨리 달렸다.\nI need to catch up on my homework this weekend.\t이번 주말에 밀린 숙제를 해야 한다.\nLet's meet for coffee and catch up.\t커피 한잔하면서 그동안 어떻게 지냈는지 이야기하자.\nI read the newspaper to catch up on the latest news.\t최근 소식을 알아보려고 신문을 읽었다."),
         entry("preliminary",
             "1. [형용사] 본격적인 일에 앞서 하는, 예비적인; 준비 단계의\n2. [형용사] 아직 확정되지 않은, 잠정적인\n3. [명사] 사전 준비나 절차; (경기 등의) 예선",
             "1. Done before the main activity as preparation.\n2. Provisional and subject to later confirmation.\n3. An initial procedure or a contest held before the final stage.",
@@ -37,3 +41,4 @@ internal object ReviewedEntries {
     ).associateBy { it.word }
     fun lookup(query: String): WordEntry? = entries[query.trim().lowercase(Locale.ROOT).replace(Regex("\\s+"), " ")]
 }
+

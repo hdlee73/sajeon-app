@@ -1,11 +1,9 @@
 package com.hdlee73.sajeonapp
 
-import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.translate.TranslateLanguage
 import com.google.mlkit.nl.translate.Translation
 import com.google.mlkit.nl.translate.TranslatorOptions
-import java.util.concurrent.TimeUnit
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentValues
@@ -78,6 +76,14 @@ class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 
         val v = ContentValues().apply { put("word", e.word); put("ipa", ""); put("korean", e.korean); put("english", e.english); put("examples", e.examples); put("source", e.source) }
         return writableDatabase.insertWithOnConflict("entries", null, v, SQLiteDatabase.CONFLICT_REPLACE) >= 0
     }
+    fun updateExamples(before: WordEntry, after: WordEntry) {
+        val old = before.studyVersion()
+        val updated = after.studyVersion()
+        val values = ContentValues().apply { put("examples", updated.examples) }
+        writableDatabase.update("entries", values,
+            "word=? COLLATE NOCASE AND examples=? AND korean=? AND english=?",
+            arrayOf(old.word, old.examples, old.korean, old.english))
+    }
     fun delete(id: Long) { writableDatabase.delete("entries", "id=?", arrayOf(id.toString())) }
 }
 
@@ -87,7 +93,21 @@ class MainActivity : Activity() {
             .setSourceLanguage(TranslateLanguage.ENGLISH)
             .setTargetLanguage(TranslateLanguage.KOREAN).build())
     }
-    private var translationModelReady = false
+    private val translationHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val translations by lazy {
+        ExampleTranslationQueue(
+            download = { done -> translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
+                .addOnSuccessListener { done(true) }.addOnFailureListener { done(false) } },
+            translate = { text, done -> translator.translate(text)
+                .addOnSuccessListener { done(it) }.addOnFailureListener { done(null) } },
+            schedule = { delay, action -> translationHandler.postDelayed({ action() }, delay) },
+            now = { android.os.SystemClock.elapsedRealtime() }
+        )
+    }
+    private val searchIo = Executors.newFixedThreadPool(2)
+    private var searchTask: java.util.concurrent.Future<*>? = null
+    private val requestContext = ThreadLocal<Int>()
+    private val connections = java.util.concurrent.ConcurrentHashMap<Int, HttpURLConnection>()
     private val io = Executors.newSingleThreadExecutor()
     private val lookupSequence = AtomicInteger(0)
     private val resultCache = mutableMapOf<String, WordEntry>()
@@ -190,33 +210,29 @@ class MainActivity : Activity() {
 
     private fun lookup(q: String) {
         val requestId = lookupSequence.incrementAndGet()
+        searchTask?.cancel(true)
+        // Disconnect old requests away from the UI thread, including blocked reads.
+        connections.entries.filter { it.key != requestId }.forEach { (id, connection) ->
+            io.execute { connection.disconnect(); connections.remove(id, connection) }
+        }
         status.text = "‘$q’ 검색 중…"
         resultBox.removeAllViews()
         showSaved = false
         updateTabs()
         current = null
-        val cached = synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] }
+        val cached = ReviewedEntries.lookup(q) ?: synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] }
         if (cached != null) {
             current = cached
             status.text = "검색 결과 · 저장된 검색"
             showEntry(cached, true)
+            completeExamples(cached, requestId)
             return
         }
-        io.execute {
-            ReviewedEntries.lookup(q)?.let { reviewed ->
-                synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = reviewed }
-                runOnUiThread {
-                    if (requestId != lookupSequence.get()) return@runOnUiThread
-                    current = reviewed
-                    status.text = "검색 결과 · 의미별 풀이"
-                    resultBox.removeAllViews()
-                    showEntry(reviewed, true)
-                }
-                return@execute
-            }
+        searchTask = searchIo.submit {
+            requestContext.set(requestId)
             val local = glossary.lookup(q)
             val humanExamples = exampleCorpus.lookup(q)
-            if (requestId != lookupSequence.get()) return@execute
+            if (requestId != lookupSequence.get()) return@submit
             if (local != null && local.english.isNotBlank() && humanExamples.isNotEmpty()) {
                 val complete = WordEntry(word = q, ipa = "", korean = local.korean,
                     english = local.english, examples = humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" },
@@ -224,13 +240,14 @@ class MainActivity : Activity() {
                         humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba")
                 synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = complete }
                 runOnUiThread {
-                    if (requestId != lookupSequence.get()) return@runOnUiThread
+                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
                     current = complete
+                    if (showSaved) return@runOnUiThread
                     status.text = "검색 결과 · 사전 뜻풀이 / 한영 예문"
                     resultBox.removeAllViews()
                     showEntry(complete, true)
                 }
-                return@execute
+                return@submit
             }
             if (local != null) {
                 val initial = WordEntry(
@@ -242,8 +259,9 @@ class MainActivity : Activity() {
                     source = localMeaningCredit(local, q) + (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } else "")
                 )
                 runOnUiThread {
-                    if (requestId != lookupSequence.get()) return@runOnUiThread
+                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
                     current = initial
+                    if (showSaved) return@runOnUiThread
                     status.text = "한글 뜻 표시됨 · 예문을 불러오는 중…"
                     resultBox.removeAllViews()
                     showEntry(initial, false)
@@ -251,6 +269,7 @@ class MainActivity : Activity() {
             }
             try {
                 val online = fetchDictionary(q)
+                if (requestId != lookupSequence.get()) return@submit
                 // Korean meanings must be dictionary records, never machine-translated definitions.
                 val inflection = InflectedForms.find(online.first)
                 val baseLocal = inflection?.let { glossary.lookup(it.base) }
@@ -264,36 +283,44 @@ class MainActivity : Activity() {
                 val sentences = online.third.split("\n").map { it.trim() }
                     .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
                     .distinct().ifEmpty { listOf(fallbackExample(q)) }.take(2)
-                val bilingual = if (humanExamples.isNotEmpty()) humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" } else sentences.map { sentence ->
-                    val ko = if (sentence == fallbackExample(q)) "오늘 대화에서 “$q”라는 표현을 들었습니다." else try { translate(sentence) } catch (_: Exception) { "" }
-                    if (ko.isBlank()) "$sentence\t(해석을 불러오지 못했습니다)" else "$sentence\t$ko"
-                }.joinToString("\n")
+                val bilingual = if (humanExamples.isNotEmpty()) humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" }
+                    else sentences.joinToString("\n") { sentence ->
+                        val ko = if (sentence == fallbackExample(q)) "오늘 대화에서 “$q”라는 표현을 들었습니다." else "(해석 준비 중…)"
+                        "$sentence\t$ko"
+                    }
                 val entry = WordEntry(word = q, ipa = "", korean = korean,
                     english = if (inflection != null) online.first else local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
                     source = "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)\n" +
                         (if (inflection != null) "변형 안내: 영영 사전의 원형 정보를 한국어로 표시\n" else "") +
                         (if (online.second.isNotBlank() && inflection == null) "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)" else if (baseLocal != null && inflection != null) localMeaningCredit(baseLocal, inflection.base) else localMeaningCredit(local, q)) +
                         (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba" else "\n일반 예문 해석: Google ML Kit 자동 번역"))
-                if (!korean.contains("등록된 영한 뜻풀이가 없습니다") && !korean.contains("불러오지 못") && !bilingual.contains("불러오지 못")) {
-                    synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
-                }
+                if (!korean.contains("등록된 영한 뜻풀이가 없습니다")) synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
                 runOnUiThread {
-                    if (requestId != lookupSequence.get()) return@runOnUiThread
+                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
                     current = entry
-                    status.text = "검색 결과"
-                    resultBox.removeAllViews()
-                    showEntry(entry, true)
+                    if (!showSaved) {
+                        status.text = "검색 결과"
+                        resultBox.removeAllViews()
+                        showEntry(entry, true)
+                    }
+                    completeExamples(entry, requestId)
                 }
             } catch (e: Exception) {
+                if (requestId != lookupSequence.get() || Thread.currentThread().isInterrupted) return@submit
                 if (local != null) {
                     runOnUiThread {
-                        if (requestId != lookupSequence.get()) return@runOnUiThread
-                        status.text = "저장된 사전 뜻을 표시했습니다. 영문 풀이와 예문은 연결 후 다시 검색해 주세요."
+                        if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
+                        current = current?.copy(english = local.english.ifBlank { "영어 풀이를 불러오지 못했습니다." })
+                        if (showSaved) return@runOnUiThread
+                        status.text = "저장된 사전 뜻을 표시했습니다. 영문 풀이는 연결 후 다시 검색해 주세요."
+                        resultBox.removeAllViews()
+                        current?.let { showEntry(it, true) }
                     }
                 } else {
                     val suggestions = try { fetchSuggestions(q) } catch (_: Exception) { emptyList() }
                     runOnUiThread {
-                        if (requestId != lookupSequence.get()) return@runOnUiThread
+                        if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
+                        if (showSaved) return@runOnUiThread
                         status.text = if (suggestions.isNotEmpty()) "‘$q’ 검색 결과가 없습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
                             else lookupErrorMessage(e)
                         resultBox.removeAllViews()
@@ -456,26 +483,47 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun translate(text: String): String {
-        if (!translationModelReady) {
-            runOnUiThread {
-                if (!isFinishing && !isDestroyed) status.text = "한국어 번역 준비 중… 최초 사용 시 번역 모델을 내려받습니다."
+    private fun completeExamples(entry: WordEntry, requestId: Int) {
+        val pairs = examplePairs(entry.examples)
+        val missing = pairs.indices.filter { pairs[it].second in setOf("", "(해석 준비 중…)", "(해석을 불러오지 못했습니다)", "(해석을 준비하지 못했습니다. 연결 후 다시 검색해 주세요.)") }
+        if (missing.isEmpty()) return
+        if (!showSaved) status.text = "검색 결과 · 예문 해석 준비 중"
+        val updatedPairs = pairs.toMutableList()
+        var remaining = missing.size
+        missing.forEach { index ->
+            translations.request(pairs[index].first) { korean ->
+                if (isDestroyed) return@request
+                updatedPairs[index] = pairs[index].first to (korean ?: "(해석을 준비하지 못했습니다. 연결 후 다시 검색해 주세요.)")
+                remaining--
+                if (remaining == 0) {
+                    val updated = entry.copy(examples = updatedPairs.joinToString("\n") { "${it.first}\t${it.second}" })
+                    if (!entry.korean.contains("등록된 영한 뜻풀이가 없습니다")) synchronized(resultCache) { resultCache[entry.word.lowercase(Locale.ROOT)] = updated }
+                    // If saved while translation was pending, fill that exact saved version too.
+                    io.execute {
+                        db.updateExamples(entry, updated)
+                        runOnUiThread { if (!isDestroyed && showSaved) renderSaved() }
+                    }
+                    if (requestId == lookupSequence.get() && current?.word == entry.word) {
+                        current = updated
+                        if (!showSaved) {
+                            status.text = if (updatedPairs.any { it.second.contains("준비하지 못") }) "검색 결과 · 예문 해석을 준비하지 못했습니다" else "검색 결과"
+                            resultBox.removeAllViews()
+                            showEntry(updated, true)
+                        }
+                    }
+                }
             }
-            Tasks.await(translator.downloadModelIfNeeded(DownloadConditions.Builder().build()), 90, TimeUnit.SECONDS)
-            translationModelReady = true
         }
-        val translated = Tasks.await(translator.translate(text), 20, TimeUnit.SECONDS).trim()
-        if (translated.isBlank() || !translated.any { it in '가'..'힣' }) {
-            throw IllegalStateException("한국어 번역 결과가 없습니다")
-        }
-        return translated
     }
 
-    private fun http(address: String, connectTimeout: Int = 6000, readTimeout: Int = 8000): String {
+    private fun http(address: String, connectTimeout: Int = 3500, readTimeout: Int = 5000): String {
+        val requestId = requestContext.get()
+        if (Thread.currentThread().isInterrupted || (requestId != null && requestId != lookupSequence.get())) throw java.io.InterruptedIOException("Search cancelled")
         val c = URL(address).openConnection() as HttpURLConnection
+        if (requestId != null) connections[requestId] = c
         c.requestMethod = "GET"; c.connectTimeout = connectTimeout; c.readTimeout = readTimeout
         c.setRequestProperty("User-Agent", "SajeonApp/1.0 (Android)")
-        return try { val code = c.responseCode; val stream = if (code in 200..299) c.inputStream else c.errorStream; val body = stream.bufferedReader().use { it.readText() }; if (code !in 200..299) throw IllegalStateException("HTTP $code"); body } finally { c.disconnect() }
+        return try { val code = c.responseCode; val stream = if (code in 200..299) c.inputStream else c.errorStream; val body = stream.bufferedReader().use { it.readText() }; if (code !in 200..299) throw IllegalStateException("HTTP $code"); body } finally { if (requestId != null) connections.remove(requestId, c); c.disconnect() }
     }
 
     private fun showEntry(original: WordEntry, canSave: Boolean) {
@@ -636,8 +684,14 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         lookupSequence.incrementAndGet()
         if (::wordSpeaker.isInitialized) wordSpeaker.close()
-        io.execute { translator.close() }
+        searchTask?.cancel(true)
+        searchIo.shutdownNow()
+        connections.values.forEach { connection -> io.execute { connection.disconnect() } }
+        translations.close()
+        translationHandler.removeCallbacksAndMessages(null)
+        translator.close()
         io.shutdown()
         super.onDestroy()
     }
 }
+

@@ -53,3 +53,12 @@ Ordinary GitHub pushes validate data and run tests. Commits containing [release]
 Versions through v1.4.0 had ephemeral build-runner signing keys. v1.5.x uses the fixed private key in Actions secret ANDROID_DEBUG_KEYSTORE_BASE64 (alias androiddebugkey, store/key password android). Never commit the private key. Updates with the same key retain the wordbook.
 
 TTS declares Android engine-discovery queries, validates English language support, prefers installed English voices, queues early taps and uses media-volume playback. Missing data, playback failures and zero media volume have user-visible guidance. Actual device sound depends on the installed engine and audio routing.
+
+
+## v1.5.7: search without waiting for translation
+
+Dictionary lookup publishes the entry before requesting automatic example translations. Model download and translation use callbacks on a separate queue; no blocking Tasks.await remains. Only one download is requested at a time. A download that has not completed within 60 seconds finishes pending requests with an inline failure message; retries are held for another 60 seconds. Each translation has a 20-second deadline. Existing human bilingual examples and reviewed entries need no model download. Successful translations are cached in memory.
+
+A new search cancels the previous task, disconnects obsolete HTTP connections away from the UI thread, and rejects stale responses. Lookup uses two workers independently of exports. Reviewed entries (including catch up) display directly, and repeated dictionary results use an in-memory cache. Pending example translations fill the exact saved record if the user saves before they arrive; other versions of that record are not overwritten. Activity destruction drops translation listeners and timers.
+
+Regression tests cover a held model download while additional requests arrive, single-flight requests, model timeout and retry cooldown, late callbacks, translation cache, per-sentence timeout, and activity close. The Android build and tests run in GitHub Actions; device search latency and audio playback still require real-device verification.
