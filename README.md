@@ -12,3 +12,7 @@ Exports now run as a WorkManager job after Android has granted the chosen docume
 ## v1.5.13: swipe actions
 
 Swipe a search-result card horizontally to save it. Swipe a saved-word row horizontally to delete it; a confirmation toast is shown and the list refreshes.
+
+## v1.5.14: offline phrase suggestions
+
+The bundled SQLite dictionary now creates an FTS4 index over every headword, including multi-word expressions. The dictionary cache is pre-opened after launch. When a typed prefix or partial phrase has local matches, the app shows those candidates immediately and does not wait for an online lookup. The disposable dictionary cache moved to v4; saved vocabulary is unaffected.

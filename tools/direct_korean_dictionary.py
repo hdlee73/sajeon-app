@@ -68,4 +68,10 @@ def add_direct_dictionary(root, destination):
             korean = "\n".join(str(i + 1) + ". " + s for i, s in enumerate(senses[:4]))
             db.execute("INSERT OR REPLACE INTO words(word,meaning_ko,meaning_en,ipa,source) VALUES(?,?,'','','KOWIKTIONARY')", (word, korean))
         total = db.execute("SELECT count(*) FROM words").fetchone()[0]
+        # The primary key handles exact lookup; FTS4 handles partial multi-word input.
+        db.execute("DROP TABLE IF EXISTS words_fts")
+        db.execute("CREATE VIRTUAL TABLE words_fts USING fts4(word)")
+        db.execute("INSERT INTO words_fts(docid, word) SELECT rowid, word FROM words")
+        indexed = db.execute("SELECT count(*) FROM words_fts").fetchone()[0]
+        assert indexed == total, "Incomplete FTS phrase index"
     print("Direct Korean-Wiktionary headwords:", len(records), "new headwords:", new, "total:", total)

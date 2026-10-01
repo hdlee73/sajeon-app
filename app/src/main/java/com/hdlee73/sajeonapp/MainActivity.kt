@@ -49,7 +49,8 @@ private class LocalGlossary(private val activity: Activity) {
     @Synchronized private fun open(): SQLiteDatabase? {
         database?.let { return it }
         return try {
-            val file = activity.getDatabasePath("meaning_dictionary_combined_v3.sqlite")
+            // v4 adds an FTS4 phrase index. The saved vocabulary database is separate.
+            val file = activity.getDatabasePath("meaning_dictionary_combined_v4.sqlite")
             if (!file.exists()) {
                 file.parentFile?.mkdirs()
                 activity.assets.open("word_dictionary.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
@@ -57,6 +58,7 @@ private class LocalGlossary(private val activity: Activity) {
             SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).also { database = it }
         } catch (_: Exception) { null }
     }
+    fun prewarm() { open() }
     fun lookup(word: String): LocalMeaning? {
         val db = open() ?: return null
         return try {
@@ -64,6 +66,17 @@ private class LocalGlossary(private val activity: Activity) {
                 if (c.moveToFirst()) LocalMeaning(c.getString(0).orEmpty(), c.getString(1).orEmpty(), c.getString(2).orEmpty(), c.getString(3).orEmpty()) else null
             }
         } catch (_: Exception) { null }
+    }
+    fun suggest(query: String): List<String> {
+        val terms = Regex("[a-z]+").findAll(query.lowercase(Locale.ROOT)).map { it.value + "*" }.toList()
+        if (terms.isEmpty()) return emptyList()
+        val db = open() ?: return emptyList()
+        return try {
+            db.rawQuery(
+                "SELECT w.word FROM words_fts f JOIN words w ON w.rowid=f.docid WHERE words_fts MATCH ? ORDER BY length(w.word), w.word LIMIT 6",
+                arrayOf(terms.joinToString(" "))
+            ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0)) } }
+        } catch (_: Exception) { emptyList() }
     }
 }
 
@@ -141,6 +154,7 @@ class MainActivity : Activity() {
         db = EntryDb(this)
         glossary = LocalGlossary(this)
         exampleCorpus = BilingualExamples(this)
+        searchIo.execute { glossary.prewarm() }
         returnToPdf = intent?.getBooleanExtra("return_to_pdf", false) == true
         buildUi()
         wordSpeaker = WordSpeaker(this) { toast(it) }
@@ -273,7 +287,17 @@ class MainActivity : Activity() {
             requestContext.set(requestId)
             val local = glossary.lookup(q)
             val humanExamples = exampleCorpus.lookup(q)
+            val candidates = if (local == null) glossary.suggest(q) else emptyList()
             if (requestId != lookupSequence.get()) return@submit
+            if (local == null && candidates.isNotEmpty()) {
+                runOnUiThread {
+                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
+                    status.text = "기기 내 사전에서 찾은 표현입니다. 원하는 표현을 선택해 주세요."
+                    resultBox.removeAllViews()
+                    showSuggestions(candidates)
+                }
+                return@submit
+            }
             if (local != null && local.english.isNotBlank() && humanExamples.isNotEmpty()) {
                 val complete = WordEntry(word = q, ipa = "", korean = local.korean,
                     english = local.english, examples = humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" },
