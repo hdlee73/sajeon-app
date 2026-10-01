@@ -15,7 +15,6 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
-import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -98,27 +97,26 @@ class MainActivity : Activity() {
     private lateinit var resultBox: LinearLayout
     private lateinit var status: TextView
     private lateinit var searchInput: EditText
-    private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    private lateinit var wordSpeaker: WordSpeaker
+    private lateinit var searchTab: Button
+    private lateinit var savedTab: Button
     private var current: WordEntry? = null
     private var showSaved = false
     private var exportFormat = 1
     private var returnToPdf = false
     private lateinit var returnButton: Button
-    private val blue = 0xff245bd6.toInt()
+    private val blue = 0xff486a90.toInt()
     private val dark = 0xff182230.toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         db = EntryDb(this)
         glossary = LocalGlossary(this)
         exampleCorpus = BilingualExamples(this)
         returnToPdf = intent?.getBooleanExtra("return_to_pdf", false) == true
         buildUi()
-        tts = TextToSpeech(this) { result ->
-            ttsReady = result == TextToSpeech.SUCCESS
-            if (ttsReady) tts?.language = Locale.US
-        }
+        wordSpeaker = WordSpeaker(this) { toast(it) }
         handleIncomingSearch(intent)
     }
 
@@ -157,20 +155,21 @@ class MainActivity : Activity() {
         }
         returnButton = button("← PDF로 돌아가기").apply { visibility = if (returnToPdf) View.VISIBLE else View.GONE; setOnClickListener { finish() } }
         root.addView(returnButton, LinearLayout.LayoutParams(-1, 46.dp()).apply { bottomMargin = 10.dp() })
-        val hero = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 18.dp(), 20.dp(), 18.dp()); background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR, intArrayOf(0xff142949.toInt(), 0xff294c79.toInt())).apply { cornerRadius = 22.dp().toFloat() } }
-        hero.addView(label("영어단어장", 25, true, 0xffffffff.toInt()))
+        val hero = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18.dp(), 12.dp(), 18.dp(), 12.dp()); background = android.graphics.drawable.GradientDrawable(android.graphics.drawable.GradientDrawable.Orientation.TL_BR, intArrayOf(0xffe3edf5.toInt(), 0xffeeeaf5.toInt())).apply { cornerRadius = 22.dp().toFloat() } }
+        hero.addView(label("영어단어장", 23, true, dark))
         root.addView(hero, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 14.dp() })
         val searchCard = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp()); background = rounded(0xffffffff.toInt(), 17) }
         searchInput = EditText(this).apply { hint = "단어, 숙어 또는 구동사"; setSingleLine(true); textSize = 16f; setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp()); background = android.graphics.drawable.ColorDrawable(0x00000000); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
         searchInput.setOnEditorActionListener { _, actionId, _ -> if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) { searchNow(); true } else false }
         searchCard.addView(searchInput, LinearLayout.LayoutParams(0, 50.dp(), 1f))
-        searchCard.addView(button("검색").apply { setOnClickListener { searchNow() } }, LinearLayout.LayoutParams(84.dp(), 50.dp()))
+        searchCard.addView(button("검색", 0xff567590.toInt(), 0xffffffff.toInt()).apply { setOnClickListener { searchNow() } }, LinearLayout.LayoutParams(84.dp(), 50.dp()))
         root.addView(searchCard)
         val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, 14.dp(), 0, 12.dp()) }
-        val searchTab = button("검색 결과").apply { setOnClickListener { showSaved = false; showPage() } }
-        val savedTab = button("저장 단어").apply { setOnClickListener { showSaved = true; renderSaved(); showPage() } }
-        tabs.addView(searchTab, LinearLayout.LayoutParams(0, 46.dp(), 1f)); tabs.addView(savedTab, LinearLayout.LayoutParams(0, 46.dp(), 1f).apply { leftMargin = 8.dp() })
+        searchTab = button("검색 결과").apply { setOnClickListener { showSaved = false; showPage() } }
+        savedTab = button("저장 단어").apply { setOnClickListener { showSaved = true; renderSaved(); showPage() } }
+        tabs.addView(searchTab, LinearLayout.LayoutParams(0, 40.dp(), 1f)); tabs.addView(savedTab, LinearLayout.LayoutParams(0, 40.dp(), 1f).apply { leftMargin = 8.dp() })
         root.addView(tabs)
+        updateTabs()
         status = label("검색어를 입력하면 뜻과 예문을 찾아드립니다.", 14, false, 0xff5d6877.toInt()).apply { setPadding(2.dp(), 0, 2.dp(), 4.dp()) }
         root.addView(status)
         val scroll = ScrollView(this).apply { setFillViewport(true) }
@@ -187,13 +186,14 @@ class MainActivity : Activity() {
         if (q.isNotEmpty()) lookup(q) else toast("검색어를 입력해 주세요")
     }
 
-    private fun showPage() { if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
+    private fun showPage() { updateTabs(); if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
 
     private fun lookup(q: String) {
         val requestId = lookupSequence.incrementAndGet()
         status.text = "‘$q’ 검색 중…"
         resultBox.removeAllViews()
         showSaved = false
+        updateTabs()
         current = null
         val cached = synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] }
         if (cached != null) {
@@ -461,12 +461,21 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18.dp(), 18.dp(), 18.dp(), 18.dp()); background = rounded(0xffffffff.toInt(), 18) }
         val wordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         wordRow.addView(label(e.word, 25, true, dark), LinearLayout.LayoutParams(0, -2, 1f))
-        wordRow.addView(button("🔊 듣기").apply { setOnClickListener { speak(e.word) } })
-        card.addView(wordRow)
+        wordRow.addView(button("🔊 듣기", 0xffeee9f7.toInt(), 0xff655880.toInt()).apply {
+            textSize = 12f
+            setOnClickListener { speak(e.word) }
+        }, LinearLayout.LayoutParams(78.dp(), 40.dp()))
         if (canSave) {
-            val saveButton = button("이 단어 저장").apply { setOnClickListener { db.save(e); toast("저장했습니다"); renderSaved(); isEnabled = false; text = "저장됨" } }
-            card.addView(saveButton, LinearLayout.LayoutParams(-1, 48.dp()).apply { topMargin = 8.dp() })
+            val saveButton = button("🔖 저장", 0xffdff0e7.toInt(), 0xff386752.toInt()).apply {
+                textSize = 12f
+                setOnClickListener {
+                    if (db.save(e)) { toast("저장했습니다"); isEnabled = false; text = "✓ 저장" }
+                    else toast("저장하지 못했습니다. 다시 시도해 주세요.")
+                }
+            }
+            wordRow.addView(saveButton, LinearLayout.LayoutParams(78.dp(), 40.dp()).apply { leftMargin = 6.dp() })
         }
+        card.addView(wordRow)
         section(card, "한글 의미", e.korean)
         val dictionaryLinks = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         dictionaryLinks.addView(label("네이버 ", 12, false, 0xff64748b.toInt()))
@@ -490,27 +499,53 @@ class MainActivity : Activity() {
         resultBox.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8.dp(); bottomMargin = 12.dp() })
     }
 
-    private fun speak(text: String) {
-        if (!ttsReady) { toast("영어 음성 엔진을 준비하고 있습니다"); return }
-        tts?.setLanguage(Locale.US)
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "word-pronunciation")
+    private fun speak(text: String) { wordSpeaker.speak(text) }
+
+    private fun updateTabs() {
+        if (!::searchTab.isInitialized || !::savedTab.isInitialized) return
+        fun style(tab: Button, selected: Boolean) {
+            tab.background = rounded(if (selected) 0xffdce8f2.toInt() else 0xffedf0f4.toInt(), 12)
+            tab.setTextColor(if (selected) blue else 0xff667384.toInt())
+            tab.setTypeface(null, if (selected) Typeface.BOLD else Typeface.NORMAL)
+            tab.isSelected = selected
+        }
+        style(searchTab, !showSaved)
+        style(savedTab, showSaved)
     }
 
     private fun renderSaved() {
         if (!showSaved) return
+        updateTabs()
         resultBox.removeAllViews()
         val entries = db.all().map { it.studyVersion() }
         if (entries.isEmpty()) { resultBox.addView(label("아직 저장한 단어가 없습니다. 검색 결과에서 원하는 단어만 저장할 수 있어요.", 15, false, 0xff5d6877.toInt()).apply { setPadding(4.dp(), 14.dp(), 4.dp(), 14.dp()) }); return }
-        resultBox.addView(button("엑셀(.xlsx)로 내보내기").apply { setOnClickListener { createXlsx() } }, LinearLayout.LayoutParams(-1, 48.dp()).apply { bottomMargin = 12.dp() })
+        resultBox.addView(button("↗ 엑셀 내보내기", 0xffdff0e7.toInt(), 0xff386752.toInt()).apply { setOnClickListener { createXlsx() } }, LinearLayout.LayoutParams(-1, 48.dp()).apply { bottomMargin = 12.dp() })
         entries.forEach { e ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(14.dp(), 12.dp(), 8.dp(), 12.dp()); background = rounded(0xffffffff.toInt(), 14) }
             val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             info.addView(label(e.word, 18, true, dark))
             info.addView(label(e.korean, 14, false, 0xff526174.toInt()).apply { maxLines = 2 })
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
-            row.addView(button("보기").apply { setOnClickListener { AlertDialog.Builder(this@MainActivity).setTitle(e.word).setMessage("한글 의미\n${e.korean}\n\nEnglish definition\n${e.english}\n\n예문 · 한국어 해석\n${displayExamples(e.examples)}").setPositiveButton("닫기", null).show() } })
-            row.addView(button("다시 검색").apply { setOnClickListener { searchInput.setText(e.word); lookup(e.word) } })
-            row.addView(button("삭제").apply { setOnClickListener { db.delete(e.id); renderSaved() } })
+            val openEntry = {
+                AlertDialog.Builder(this@MainActivity).setTitle(e.word)
+                    .setMessage("한글 의미\n" + e.korean + "\n\nEnglish definition\n" + e.english + "\n\n예문 · 한국어 해석\n" + displayExamples(e.examples))
+                    .setNeutralButton("🔊 듣기") { _, _ -> speak(e.word) }
+                    .setPositiveButton("닫기", null).show()
+            }
+            info.setOnClickListener { openEntry() }
+            row.addView(button("보기").apply { textSize = 12f; setOnClickListener { openEntry() } },
+                LinearLayout.LayoutParams(56.dp(), 40.dp()))
+            row.addView(button("⋯").apply {
+                textSize = 22f
+                contentDescription = "단어 메뉴"
+                setOnClickListener { anchor ->
+                    PopupMenu(this@MainActivity, anchor).apply {
+                        menu.add("다시 검색").setOnMenuItemClickListener { searchInput.setText(e.word); lookup(e.word); true }
+                        menu.add("삭제").setOnMenuItemClickListener { db.delete(e.id); renderSaved(); true }
+                        show()
+                    }
+                }
+            }, LinearLayout.LayoutParams(40.dp(), 40.dp()).apply { leftMargin = 4.dp() })
             resultBox.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8.dp() })
         }
     }
@@ -571,15 +606,14 @@ class MainActivity : Activity() {
     private fun xml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;").replace("\n", "&#10;")
     private fun section(parent: LinearLayout, title: String, value: String) { parent.addView(label(title, 14, true, blue).apply { setPadding(0, 10.dp(), 0, 3.dp()) }); parent.addView(label(value, 16, false, dark)) }
     private fun label(text: String, size: Int, bold: Boolean, color: Int) = TextView(this).apply { this.text = text; textSize = size.toFloat(); setTextColor(color); if (bold) setTypeface(null, Typeface.BOLD); setLineSpacing(2.dp().toFloat(), 1f) }
-    private fun button(text: String) = Button(this).apply { this.text = text; textSize = 14f; isAllCaps = false; setTextColor(0xffffffff.toInt()); background = rounded(blue, 12); minHeight = 0; minimumHeight = 0; stateListAnimator = null }
+    private fun button(text: String, fill: Int = 0xffedf1f6.toInt(), ink: Int = blue) = Button(this).apply { this.text = text; textSize = 14f; isAllCaps = false; setTextColor(ink); background = rounded(fill, 12); setPadding(10.dp(), 0, 10.dp(), 0); minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0; stateListAnimator = null }
     private fun rounded(color: Int, radius: Int) = android.graphics.drawable.GradientDrawable().apply { setColor(color); cornerRadius = radius.dp().toFloat() }
     private fun Int.dp() = (this * resources.displayMetrics.density).toInt()
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
         lookupSequence.incrementAndGet()
-        tts?.stop()
-        tts?.shutdown()
+        if (::wordSpeaker.isInitialized) wordSpeaker.close()
         io.execute { translator.close() }
         io.shutdown()
         super.onDestroy()
