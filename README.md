@@ -29,3 +29,13 @@ The bundled SQLite dictionary now creates an FTS4 index over every headword, inc
 
 **Removed.** The Anki button, AnkiDroid sharing and the Anki CSV export; the placeholder example sentence (“I heard … in a conversation today.”), which is also stripped from previously saved words; and unused machine-translation queue code.
 
+## v1.6.1: automatic fallback dictionary, translated examples, keyboard
+
+**Korean meanings.** When neither the bundled dictionary nor the Wiktionary translations have a Korean meaning (rare words, phrases, names), the app now asks Google Translate's bilingual dictionary and shows numbered senses with parts of speech, e.g. `1. [명사] 호기심, 궁금증`. Phrases without a dictionary entry get a plain translation. Anything that came from this fallback is labeled **자동 번역** in the result credit and the status line, and curated dictionary records are always preferred. Headwords that are also inflected forms (*wanted, tried, freed*) now carry a note such as “want의 과거형·과거분사이기도 합니다”.
+
+**Examples always have a Korean line.** Corpus and reviewed examples already had human translations; English sentences from the online dictionary used to be shown alone. They are now translated automatically (marked “예문 해석: 구글 번역 (자동 번역)”). If a translation can't be fetched, the entry is not cached, the status line says so, and searching again retries.
+
+**Keyboard.** The search button and the keyboard's search key now dismiss the keyboard and move focus off the text field, so it no longer reappears when the results are drawn.
+
+Note: the fallback and example translations send the searched word and example sentences to `translate.googleapis.com` (the unofficial `gtx` client, no key). Words found in the bundled dictionary with a complete offline entry never leave the device.
+

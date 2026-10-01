@@ -130,11 +130,14 @@ class MainActivity : Activity() {
     private val requestContext = ThreadLocal<Int>()
     private val connections = java.util.concurrent.ConcurrentHashMap<Int, HttpURLConnection>()
     private val io = Executors.newSingleThreadExecutor()
+    private val translateIo = Executors.newFixedThreadPool(3)
+    private val translationCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val lookupSequence = AtomicInteger(0)
     private val resultCache = mutableMapOf<String, WordEntry>()
     private lateinit var exampleCorpus: BilingualExamples
     private lateinit var glossary: LocalGlossary
     private lateinit var db: EntryDb
+    private lateinit var screenRoot: LinearLayout
     private lateinit var resultBox: LinearLayout
     private lateinit var status: TextView
     private lateinit var searchInput: EditText
@@ -208,7 +211,8 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 16.dp(), 20.dp(), 12.dp()); setBackgroundColor(0xfff3f6fb.toInt()) }
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(20.dp(), 16.dp(), 20.dp(), 12.dp()); setBackgroundColor(0xfff3f6fb.toInt()); isFocusable = true; isFocusableInTouchMode = true }
+        screenRoot = root
         setContentView(root)
         // Android 15+ draws edge-to-edge for apps targeting API 35. Keep the app
         // content below the status bar and above the navigation/gesture area.
@@ -260,9 +264,21 @@ class MainActivity : Activity() {
     private fun searchNow() {
         debounceHandler.removeCallbacks(debouncedSearch)
         val q = searchInput.text.toString().trim()
-        (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(searchInput.windowToken, 0)
-        searchInput.clearFocus()
+        hideKeyboard()
         if (q.isNotEmpty()) lookup(q) else toast("검색어를 입력해 주세요")
+    }
+
+    /**
+     * Hides the keyboard and moves focus off the search field. Clearing focus alone lets Android
+     * hand focus straight back to the only focusable view (the field), which brought the keyboard
+     * back when the results were drawn, so focus is parked on the screen root instead.
+     */
+    private fun hideKeyboard() {
+        val token = (currentFocus ?: window.decorView).windowToken
+        (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(token, 0)
+        if (android.os.Build.VERSION.SDK_INT >= 30) window.insetsController?.hide(android.view.WindowInsets.Type.ime())
+        searchInput.clearFocus()
+        if (::screenRoot.isInitialized) screenRoot.requestFocus()
     }
 
     private fun showPage() { updateTabs(); if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
@@ -301,6 +317,7 @@ class MainActivity : Activity() {
                 resultBox.removeAllViews()
                 entry?.let { showEntry(it, canSave) }
                 if (suggestions.isNotEmpty()) showSuggestions(suggestions, suggestionTitle)
+                if (!searchInput.hasFocus()) hideKeyboard()
             }
 
             // 1) Offline: exact headword, or the base word of an inflected form (went → go).
@@ -355,6 +372,17 @@ class MainActivity : Activity() {
                         source = listOf(offlineCredit, humanCredit).filter { it.isNotBlank() }.joinToString("\n")),
                         "기기 내 사전 뜻을 표시했습니다. 영어 풀이는 인터넷 연결 후 다시 검색해 주세요.")
                 } else {
+                    // Not in the English dictionary API either (phrases, names, rare words): try the
+                    // automatic dictionary before giving up.
+                    val auto = autoMeaning(q, requestId)
+                    if (stale()) return@submit
+                    if (auto != null) {
+                        val entry = WordEntry(word = q, ipa = "", korean = auto.text, english = "", examples = humanExampleText,
+                            source = listOf(MachineTranslation.CREDIT_MEANING, humanCredit).filter { it.isNotBlank() }.joinToString("\n"))
+                        synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
+                        present(entry, "검색 결과 · 한글 뜻은 자동 번역입니다")
+                        return@submit
+                    }
                     val suggestions = (phraseCandidates + glossary.spellingCandidates(q) +
                         (try { fetchSuggestions(q) } catch (_: Exception) { emptyList() })).distinct().take(6)
                     present(null, if (suggestions.isNotEmpty()) "‘$q’에 대한 결과가 없습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
@@ -364,19 +392,47 @@ class MainActivity : Activity() {
             }
             if (stale()) return@submit
 
-            // Korean meanings always come from dictionary records, never machine translation.
-            val formOf = if (offlineKorean == null) InflectedForms.find(online.allDefinitions) else null
-            val formBase = formOf?.let { ReviewedEntries.lookup(it.base)?.korean ?: glossary.lookup(it.base)?.korean }
+            // Korean meanings come from dictionary records first. Only when no curated dictionary
+            // has an answer is a clearly labeled automatic translation used.
+            val formOf = InflectedForms.find(online.allDefinitions)?.takeIf { !it.base.equals(q, true) }
+            val formBaseKorean = formOf?.let { ReviewedEntries.lookup(it.base)?.korean ?: glossary.lookup(it.base)?.korean }
             val formBaseLocal = formOf?.let { glossary.lookup(it.base) }
-            val korean = offlineKorean
-                ?: formOf?.korean(formBase ?: online.korean.ifBlank { null })
-                ?: online.korean.ifBlank { null }
+            var usedAutoMeaning = false
+            val korean: String? = when {
+                offlineKorean != null -> {
+                    // "wanted" is a headword (adjective) and also the past tense of "want".
+                    val note = if (local != null && pointer == null && alsoForm == null && formOf != null && formBaseKorean != null)
+                        BaseForm(formOf.base, formOf.form).note(formBaseKorean) + "\n" else ""
+                    note + offlineKorean
+                }
+                formOf != null -> {
+                    val baseGloss = formBaseKorean ?: online.korean.ifBlank { null }
+                        ?: autoMeaning(formOf.base, requestId)?.also { usedAutoMeaning = true }?.text
+                    formOf.korean(baseGloss)
+                }
+                online.korean.isNotBlank() -> online.korean
+                else -> autoMeaning(q, requestId)?.also { usedAutoMeaning = true }?.text
+            }
+            if (stale()) return@submit
             val spelling = if (korean == null) (glossary.spellingCandidates(q) + phraseCandidates).distinct().take(5) else emptyList()
             val english = local?.english?.ifBlank { null } ?: online.english
-            val examples = humanExampleText.ifBlank { online.examples.joinToString("\n") { "$it\t" } }
+
+            // Every example gets a Korean line: corpus pairs are human translations, online English
+            // sentences are translated automatically.
+            var machineExamples = false
+            var missingTranslations = 0
+            val examples = if (humanExamples.isNotEmpty()) humanExampleText else {
+                val translated = translateSentences(online.examples, requestId)
+                online.examples.zip(translated).joinToString("\n") { (sentence, ko) ->
+                    if (ko == null) missingTranslations++ else machineExamples = true
+                    "$sentence\t${ko.orEmpty()}"
+                }
+            }
+            if (stale()) return@submit
             val koreanCredit = when {
                 offlineKorean != null -> offlineCredit
                 formOf != null && formBaseLocal != null -> localMeaningCredit(formBaseLocal, formOf.base)
+                usedAutoMeaning -> MachineTranslation.CREDIT_MEANING
                 online.korean.isNotBlank() -> "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)"
                 else -> ""
             }
@@ -386,11 +442,41 @@ class MainActivity : Activity() {
                 english = english,
                 source = listOf(koreanCredit,
                     if (local?.english.isNullOrBlank()) "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)" else "",
-                    humanCredit.ifBlank { if (online.examples.isNotEmpty()) "영어 예문: FreeDictionaryAPI / Wiktionary" else "" })
+                    humanCredit.ifBlank { if (online.examples.isNotEmpty()) "영어 예문: FreeDictionaryAPI / Wiktionary" else "" },
+                    if (machineExamples) MachineTranslation.CREDIT_EXAMPLES else "")
                     .filter { it.isNotBlank() }.joinToString("\n"))
-            if (korean != null) synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
-            present(entry, if (korean != null) "검색 결과" else "한글 뜻풀이를 찾지 못했습니다",
-                canSave = korean != null, suggestions = spelling)
+            // An entry with a missing example translation is not cached, so searching again retries.
+            if (korean != null && missingTranslations == 0) synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
+            present(entry, when {
+                korean == null -> "한글 뜻풀이를 찾지 못했습니다"
+                missingTranslations > 0 -> "검색 결과 · 예문 해석을 불러오지 못했습니다. 다시 검색하면 해석이 추가됩니다."
+                usedAutoMeaning || machineExamples -> "검색 결과 · 일부 자동 번역 포함"
+                else -> "검색 결과"
+            }, canSave = korean != null, suggestions = spelling)
+        }
+    }
+
+    /** Automatic dictionary/translation lookup; null when offline, rate limited or not Korean. */
+    private fun autoMeaning(word: String, requestId: Int): MachineMeaning? = try {
+        requestContext.set(requestId)
+        MachineTranslation.meaning(http(MachineTranslation.url(word, true), 2500, 3500), word)
+    } catch (_: Exception) { null }
+
+    /** Translates sentences in parallel; a failed sentence is null. Results are cached per session. */
+    private fun translateSentences(sentences: List<String>, requestId: Int): List<String?> {
+        val futures = sentences.map { sentence ->
+            if (translationCache.containsKey(sentence)) null
+            else translateIo.submit<String?> {
+                try {
+                    requestContext.set(requestId)
+                    MachineTranslation.sentence(http(MachineTranslation.url(sentence, false), 2500, 3500), sentence)
+                        ?.also { translationCache[sentence] = it }
+                } catch (_: Exception) { null }
+            }
+        }
+        return sentences.mapIndexed { i, sentence ->
+            translationCache[sentence] ?: try { futures[i]?.get(5, java.util.concurrent.TimeUnit.SECONDS) }
+            catch (_: Exception) { futures[i]?.cancel(true); null }
         }
     }
 
@@ -431,7 +517,7 @@ class MainActivity : Activity() {
         words.forEach { candidate ->
             val pick = button("$candidate   ›").apply {
                 gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                setOnClickListener { setSearchTextWithoutDebounce(candidate); lookup(candidate) }
+                setOnClickListener { setSearchTextWithoutDebounce(candidate); hideKeyboard(); lookup(candidate) }
             }
             card.addView(pick, LinearLayout.LayoutParams(-1, 44.dp()).apply { topMargin = 5.dp() })
         }
@@ -546,7 +632,7 @@ class MainActivity : Activity() {
         dictionaryLinks.addView(label(" · ", 12, false, 0xff64748b.toInt()))
         addDictionaryLink("영영", "https://dict.naver.com/enendict/#/search?query=")
         card.addView(dictionaryLinks)
-        section(card, "English definition", e.english)
+        if (e.english.isNotBlank()) section(card, "English definition", e.english)
         val pairs = examplePairs(e.examples)
         if (pairs.isNotEmpty()) {
             section(card, if (pairs.any { it.second.isNotBlank() }) "예문 · 한국어 해석" else "영어 예문", displayExamples(e.examples))
@@ -593,7 +679,7 @@ class MainActivity : Activity() {
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
             val openEntry = {
                 AlertDialog.Builder(this@MainActivity).setTitle(e.word)
-                    .setMessage("한글 의미\n" + e.korean + "\n\nEnglish definition\n" + e.english +
+                    .setMessage("한글 의미\n" + e.korean + (if (e.english.isBlank()) "" else "\n\nEnglish definition\n" + e.english) +
                         displayExamples(e.examples).let { if (it.isBlank()) "" else "\n\n예문\n$it" })
                     .setNeutralButton("🔊 듣기") { _, _ -> speak(e.word) }
                     .setPositiveButton("닫기", null).show()
@@ -698,6 +784,7 @@ class MainActivity : Activity() {
         if (::wordSpeaker.isInitialized) wordSpeaker.close()
         searchTask?.cancel(true)
         searchIo.shutdownNow()
+        translateIo.shutdownNow()
         connections.values.forEach { connection -> io.execute { connection.disconnect() } }
         io.shutdown()
         super.onDestroy()

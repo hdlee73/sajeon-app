@@ -9,6 +9,7 @@ The bundled offline dictionary (`word_dictionary.sqlite`) and example corpus are
 Online data:
 
 - English definitions, examples and Korean lexical translations: [FreeDictionaryAPI.com](https://freedictionaryapi.com/) (English Wiktionary content, CC BY-SA 4.0), with [dictionaryapi.dev](https://dictionaryapi.dev/) as a fallback.
+- Automatic fallback for Korean meanings and example translations (labeled as automatic translation in the app): Google Translate (`translate.googleapis.com`, unofficial `gtx` client).
 - Spelling suggestions when nothing is found: [Datamuse API](https://www.datamuse.com/api/).
 
 Korean meanings are never machine-translated. Full details: `app/src/main/assets/DATA_SOURCES.txt`.
