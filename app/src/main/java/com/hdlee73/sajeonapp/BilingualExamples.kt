@@ -1,6 +1,6 @@
 package com.hdlee73.sajeonapp
 
-import android.app.Activity
+import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import java.util.Locale
 
@@ -15,21 +15,15 @@ internal object UsageMatcher {
     }
 }
 
-internal class BilingualExamples(private val activity: Activity) {
+internal class BilingualExamples(private val activity: Context) {
     private var database: SQLiteDatabase? = null
-    fun lookup(query: String): List<BilingualSentence> {
+    @Synchronized fun lookup(query: String): List<BilingualSentence> {
         return try {
-            if (database == null) {
-                val file = activity.getDatabasePath("bilingual_examples_v1.sqlite")
-                if (!file.exists()) {
-                    file.parentFile?.mkdirs()
-                    activity.assets.open("bilingual_examples.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
-                }
-                database = SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY)
-            }
+            val db = database ?: AssetDatabase.open(activity, "bilingual_examples.sqlite", "bilingual_examples", 2)
+                ?.also { database = it } ?: return emptyList()
             val token = Regex("[a-z]+(?:'[a-z]+)?").find(query.lowercase(Locale.ROOT))?.value ?: return emptyList()
             val matches = mutableListOf<BilingualSentence>()
-            database!!.rawQuery("SELECT e.english,e.korean,e.credit FROM examples e JOIN tokens t ON t.example_id=e.id WHERE t.token=? AND length(e.english)>=18 ORDER BY length(e.english),e.id LIMIT 500", arrayOf(token)).use { c ->
+            db.rawQuery("SELECT e.english,e.korean,e.credit FROM examples e JOIN tokens t ON t.example_id=e.id WHERE t.token=? AND length(e.english)>=18 ORDER BY length(e.english),e.id LIMIT 500", arrayOf(token)).use { c ->
                 while (c.moveToNext() && matches.size < 2) {
                     val en = c.getString(0)
                     if (SentenceExamples.isSentence(en) && UsageMatcher.contains(en, query) && matches.none { it.english == en }) {

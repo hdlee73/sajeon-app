@@ -20,7 +20,6 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.work.OneTimeWorkRequestBuilder
@@ -30,7 +29,6 @@ import com.google.android.material.color.DynamicColors
 import com.google.android.material.color.MaterialColors
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -38,27 +36,33 @@ import java.util.Locale
 import kotlin.math.abs
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 
 data class WordEntry(val id: Long = 0, val word: String, val ipa: String, val korean: String, val english: String, val examples: String, val source: String = "")
 private data class LocalMeaning(val korean: String, val english: String, val ipa: String, val source: String)
 
-private class LocalGlossary(private val activity: Activity) {
+private class LocalGlossary(private val context: Context) {
     private var database: SQLiteDatabase? = null
-    @Synchronized private fun open(): SQLiteDatabase? {
-        database?.let { return it }
-        return try {
-            // v4 adds an FTS4 phrase index. The saved vocabulary database is separate.
-            val file = activity.getDatabasePath("meaning_dictionary_combined_v4.sqlite")
-            if (!file.exists()) {
-                file.parentFile?.mkdirs()
-                activity.assets.open("word_dictionary.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
-            }
-            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).also { database = it }
-        } catch (_: Exception) { null }
-    }
+    // The saved vocabulary database (sajeon.db) is separate and never touched here.
+    @Synchronized private fun open(): SQLiteDatabase? =
+        database ?: AssetDatabase.open(context, "word_dictionary.sqlite", "meaning_dictionary", 5)?.also { database = it }
     fun prewarm() { open() }
+    fun contains(word: String): Boolean = lookup(word) != null
+    /** Dictionary headwords one edit away from a misspelled query, common entries first. */
+    fun spellingCandidates(word: String): List<String> {
+        val edits = Spelling.edits1(word).toList()
+        if (edits.isEmpty()) return emptyList()
+        val db = open() ?: return emptyList()
+        val found = mutableListOf<Pair<String, String>>()
+        return try {
+            edits.chunked(400).forEach { chunk ->
+                val marks = chunk.joinToString(",") { "?" }
+                db.rawQuery("SELECT word, source FROM words WHERE word IN ($marks)", chunk.toTypedArray()).use { c ->
+                    while (c.moveToNext()) found += c.getString(0) to c.getString(1).orEmpty()
+                }
+            }
+            Spelling.rank(word, found).take(5)
+        } catch (_: Exception) { emptyList() }
+    }
     fun lookup(word: String): LocalMeaning? {
         val db = open() ?: return null
         return try {
@@ -263,6 +267,8 @@ class MainActivity : Activity() {
 
     private fun showPage() { updateTabs(); if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
 
+    private data class OnlineResult(val english: String, val korean: String, val examples: List<String>, val allDefinitions: String)
+
     private fun lookup(q: String) {
         debounceHandler.removeCallbacks(debouncedSearch)
         val requestId = lookupSequence.incrementAndGet()
@@ -279,120 +285,112 @@ class MainActivity : Activity() {
         val cached = ReviewedEntries.lookup(q) ?: synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] }
         if (cached != null) {
             current = cached
-            status.text = "검색 결과 · 저장된 검색"
+            status.text = "검색 결과"
             showEntry(cached, true)
             return
         }
         searchTask = searchIo.submit {
             requestContext.set(requestId)
+            fun stale() = requestId != lookupSequence.get() || Thread.currentThread().isInterrupted
+            fun present(entry: WordEntry?, text: String, canSave: Boolean = true,
+                        suggestions: List<String> = emptyList(), suggestionTitle: String = "혹시 이 단어인가요?") = runOnUiThread {
+                if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
+                if (entry != null) current = entry
+                if (showSaved) return@runOnUiThread
+                status.text = text
+                resultBox.removeAllViews()
+                entry?.let { showEntry(it, canSave) }
+                if (suggestions.isNotEmpty()) showSuggestions(suggestions, suggestionTitle)
+            }
+
+            // 1) Offline: exact headword, or the base word of an inflected form (went → go).
             val local = glossary.lookup(q)
+            val baseForm = if (local == null) WordForms.find(q) { glossary.contains(it) } else null
+            val baseLocal = baseForm?.let { glossary.lookup(it.base) }
+            val alsoForm = if (local != null) WordForms.irregular(q)?.let { form -> glossary.lookup(form.base)?.let { form to it } } else null
+            // Rows such as "asked: ask의 과거형" get the base word's real senses underneath.
+            val pointer = local?.let { WordForms.pointerBase(it.korean) }?.let { base -> glossary.lookup(base) }
+            val offlineKorean = when {
+                local != null && pointer != null -> local.korean.lines().filter { it.isNotBlank() }
+                    .joinToString("\n") { "[변화형] " + it.replace(Regex("^\\s*\\d+[.)]\\s*"), "") } + "\n" + StudyMeanings.limit(pointer.korean)
+                local != null -> (alsoForm?.let { (form, base) -> form.note(base.korean) + "\n" } ?: "") + local.korean
+                baseForm != null && baseLocal != null -> baseForm.korean(baseLocal.korean)
+                else -> null
+            }
+            val offlineCredit = when {
+                local != null -> localMeaningCredit(local, q)
+                baseLocal != null -> localMeaningCredit(baseLocal, baseForm!!.base)
+                else -> ""
+            }
             val humanExamples = exampleCorpus.lookup(q)
-            val candidates = if (local == null) glossary.suggest(q) else emptyList()
-            if (requestId != lookupSequence.get()) return@submit
-            if (local == null && candidates.isNotEmpty()) {
-                runOnUiThread {
-                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
-                    status.text = "기기 내 사전에서 찾은 표현입니다. 원하는 표현을 선택해 주세요."
-                    resultBox.removeAllViews()
-                    showSuggestions(candidates)
+            val humanExampleText = humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" }
+            val humanCredit = if (humanExamples.isEmpty()) "" else humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba"
+            val phraseCandidates = if (offlineKorean == null) glossary.suggest(q).filter { !it.equals(q, true) } else emptyList()
+            if (stale()) return@submit
+
+            if (offlineKorean != null) {
+                val englishLocal = local?.english.orEmpty()
+                val initial = WordEntry(word = q, ipa = "", korean = offlineKorean,
+                    english = englishLocal.ifBlank { "영어 풀이를 불러오는 중…" }, examples = humanExampleText,
+                    source = listOf(offlineCredit, humanCredit).filter { it.isNotBlank() }.joinToString("\n"))
+                if (englishLocal.isNotBlank() && humanExamples.isNotEmpty()) {
+                    // Complete offline entry: no network needed.
+                    synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = initial }
+                    present(initial, "검색 결과 · 기기 내 사전")
+                    return@submit
                 }
-                return@submit
+                present(initial, "한글 뜻 표시됨 · 영어 풀이와 예문을 불러오는 중…", canSave = false)
+            } else if (phraseCandidates.isNotEmpty()) {
+                present(null, "기기 내 사전 후보를 표시했습니다 · 온라인 사전 확인 중…",
+                    suggestions = phraseCandidates, suggestionTitle = "이 표현을 찾으세요?")
             }
-            if (local != null && local.english.isNotBlank() && humanExamples.isNotEmpty()) {
-                val complete = WordEntry(word = q, ipa = "", korean = local.korean,
-                    english = local.english, examples = humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" },
-                    source = localMeaningCredit(local, q) + "\n" +
-                        humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba")
-                synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = complete }
-                runOnUiThread {
-                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
-                    current = complete
-                    if (showSaved) return@runOnUiThread
-                    status.text = "검색 결과 · 사전 뜻풀이 / 한영 예문"
-                    resultBox.removeAllViews()
-                    showEntry(complete, true)
-                }
-                return@submit
-            }
-            if (local != null) {
-                val initial = WordEntry(
-                    word = q,
-                    ipa = "",
-                    korean = naturalizeKorean(q, local.korean),
-                    english = local.english.ifBlank { "영어 풀이를 불러오는 중…" },
-                    examples = humanExamples.takeIf { it.isNotEmpty() }?.joinToString("\n") { "${it.english}\t${it.korean}" } ?: bilingualFallbackExample(q),
-                    source = localMeaningCredit(local, q) + (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } else "")
-                )
-                runOnUiThread {
-                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
-                    current = initial
-                    if (showSaved) return@runOnUiThread
-                    status.text = "한글 뜻 표시됨 · 예문을 불러오는 중…"
-                    resultBox.removeAllViews()
-                    showEntry(initial, false)
-                }
-            }
-            try {
-                val online = fetchDictionary(q)
-                if (requestId != lookupSequence.get()) return@submit
-                // Korean meanings must be dictionary records, never machine-translated definitions.
-                val inflection = InflectedForms.find(online.first)
-                val baseLocal = inflection?.let { glossary.lookup(it.base) }
-                val baseMeaning = inflection?.let { form ->
-                    ReviewedEntries.lookup(form.base)?.korean ?: baseLocal?.korean
-                }
-                val korean = inflection?.korean(baseMeaning ?: online.second.takeIf { it.isNotBlank() } ?: local?.korean)
-                    ?: online.second.takeIf { it.isNotBlank() }
-                    ?: local?.korean?.takeIf { it.isNotBlank() }
-                    ?: "등록된 영한 뜻풀이가 없습니다. 아래 네이버 사전에서 확인해 주세요."
-                val sentences = online.third.split("\n").map { it.trim() }
-                    .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
-                    .distinct().ifEmpty { listOf(fallbackExample(q)) }.take(2)
-                // Automatic machine translation caused a long first-search delay. Show the
-                // source English sentence immediately; reviewed corpus pairs remain bilingual.
-                val bilingual = if (humanExamples.isNotEmpty()) humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" }
-                    else sentences.joinToString("\n") { sentence ->
-                        if (sentence == fallbackExample(q)) "$sentence\t오늘 대화에서 “$q”라는 표현을 들었습니다." else "$sentence\t"
-                    }
-                val entry = WordEntry(word = q, ipa = "", korean = korean,
-                    english = if (inflection != null) online.first else local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
-                    source = "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)\n" +
-                        (if (inflection != null) "변형 안내: 영영 사전의 원형 정보를 한국어로 표시\n" else "") +
-                        (if (online.second.isNotBlank() && inflection == null) "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)" else if (baseLocal != null && inflection != null) localMeaningCredit(baseLocal, inflection.base) else localMeaningCredit(local, q)) +
-                        (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba" else "\n일반 예문: 영어 사전 예문"))
-                if (!korean.contains("등록된 영한 뜻풀이가 없습니다")) synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
-                runOnUiThread {
-                    if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
-                    current = entry
-                    if (!showSaved) {
-                        status.text = "검색 결과"
-                        resultBox.removeAllViews()
-                        showEntry(entry, true)
-                    }
-                }
-            } catch (e: Exception) {
-                if (requestId != lookupSequence.get() || Thread.currentThread().isInterrupted) return@submit
-                if (local != null) {
-                    runOnUiThread {
-                        if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
-                        current = current?.copy(english = local.english.ifBlank { "영어 풀이를 불러오지 못했습니다." })
-                        if (showSaved) return@runOnUiThread
-                        status.text = "저장된 사전 뜻을 표시했습니다. 영문 풀이는 연결 후 다시 검색해 주세요."
-                        resultBox.removeAllViews()
-                        current?.let { showEntry(it, true) }
-                    }
+
+            // 2) Online: English definitions, examples and (if still needed) a Korean meaning.
+            val online = try { fetchDictionary(q) } catch (e: Exception) {
+                if (stale()) return@submit
+                if (offlineKorean != null) {
+                    val englishLocal = local?.english.orEmpty()
+                    present(WordEntry(word = q, ipa = "", korean = offlineKorean,
+                        english = englishLocal.ifBlank { "영어 풀이를 불러오지 못했습니다." }, examples = humanExampleText,
+                        source = listOf(offlineCredit, humanCredit).filter { it.isNotBlank() }.joinToString("\n")),
+                        "기기 내 사전 뜻을 표시했습니다. 영어 풀이는 인터넷 연결 후 다시 검색해 주세요.")
                 } else {
-                    val suggestions = try { fetchSuggestions(q) } catch (_: Exception) { emptyList() }
-                    runOnUiThread {
-                        if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
-                        if (showSaved) return@runOnUiThread
-                        status.text = if (suggestions.isNotEmpty()) "‘$q’ 검색 결과가 없습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
-                            else lookupErrorMessage(e)
-                        resultBox.removeAllViews()
-                        if (suggestions.isNotEmpty()) showSuggestions(suggestions)
-                    }
+                    val suggestions = (phraseCandidates + glossary.spellingCandidates(q) +
+                        (try { fetchSuggestions(q) } catch (_: Exception) { emptyList() })).distinct().take(6)
+                    present(null, if (suggestions.isNotEmpty()) "‘$q’에 대한 결과가 없습니다. 철자를 확인하거나 아래 단어를 선택해 보세요."
+                        else lookupErrorMessage(e), suggestions = suggestions)
                 }
+                return@submit
             }
+            if (stale()) return@submit
+
+            // Korean meanings always come from dictionary records, never machine translation.
+            val formOf = if (offlineKorean == null) InflectedForms.find(online.allDefinitions) else null
+            val formBase = formOf?.let { ReviewedEntries.lookup(it.base)?.korean ?: glossary.lookup(it.base)?.korean }
+            val formBaseLocal = formOf?.let { glossary.lookup(it.base) }
+            val korean = offlineKorean
+                ?: formOf?.korean(formBase ?: online.korean.ifBlank { null })
+                ?: online.korean.ifBlank { null }
+            val spelling = if (korean == null) (glossary.spellingCandidates(q) + phraseCandidates).distinct().take(5) else emptyList()
+            val english = local?.english?.ifBlank { null } ?: online.english
+            val examples = humanExampleText.ifBlank { online.examples.joinToString("\n") { "$it\t" } }
+            val koreanCredit = when {
+                offlineKorean != null -> offlineCredit
+                formOf != null && formBaseLocal != null -> localMeaningCredit(formBaseLocal, formOf.base)
+                online.korean.isNotBlank() -> "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)"
+                else -> ""
+            }
+            val entry = WordEntry(word = q, ipa = "", examples = examples,
+                korean = korean ?: "기기 내 사전과 온라인 사전에 한글 뜻풀이가 없습니다." +
+                    (if (spelling.isNotEmpty()) " 철자를 확인하거나 아래 추천 단어를 눌러 보세요." else " 아래 네이버 사전에서 확인해 주세요."),
+                english = english,
+                source = listOf(koreanCredit,
+                    if (local?.english.isNullOrBlank()) "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)" else "",
+                    humanCredit.ifBlank { if (online.examples.isNotEmpty()) "영어 예문: FreeDictionaryAPI / Wiktionary" else "" })
+                    .filter { it.isNotBlank() }.joinToString("\n"))
+            if (korean != null) synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
+            present(entry, if (korean != null) "검색 결과" else "한글 뜻풀이를 찾지 못했습니다",
+                canSave = korean != null, suggestions = spelling)
         }
     }
 
@@ -427,21 +425,20 @@ class MainActivity : Activity() {
         return out.take(5)
     }
 
-    private fun showSuggestions(words: List<String>) {
+    private fun showSuggestions(words: List<String>, title: String = "혹시 이 단어인가요?") {
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18.dp(), 16.dp(), 18.dp(), 16.dp()); background = rounded(0xffffffff.toInt(), 18) }
-        card.addView(label("혹시 이 단어인가요?", 18, true, dark))
-        card.addView(label("가장 가까운 철자부터 보여드려요.", 13, false, 0xff64748b.toInt()).apply { setPadding(0, 4.dp(), 0, 10.dp()) })
+        card.addView(label(title, 18, true, dark).apply { setPadding(0, 0, 0, 8.dp()) })
         words.forEach { candidate ->
             val pick = button("$candidate   ›").apply {
                 gravity = Gravity.CENTER_VERTICAL or Gravity.START
-                setOnClickListener { searchInput.setText(candidate); lookup(candidate) }
+                setOnClickListener { setSearchTextWithoutDebounce(candidate); lookup(candidate) }
             }
             card.addView(pick, LinearLayout.LayoutParams(-1, 44.dp()).apply { topMargin = 5.dp() })
         }
         resultBox.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8.dp() })
     }
 
-    private fun fetchDictionary(q: String): Triple<String, String, String> {
+    private fun fetchDictionary(q: String): OnlineResult {
         return try {
             fetchOpenDictionary(q)
         } catch (primaryError: Exception) {
@@ -454,40 +451,26 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun fetchOpenDictionary(q: String): Triple<String, String, String> {
+    private fun fetchOpenDictionary(q: String): OnlineResult {
         val encoded = URLEncoder.encode(q, "UTF-8").replace("+", "%20")
         val root = JSONObject(http("https://freedictionaryapi.com/api/v1/entries/en/$encoded?translations=true", 3500, 5000))
         val entries = root.optJSONArray("entries") ?: JSONArray()
         val allSenses = mutableListOf<JSONObject>()
-        var ipa = ""
         for (i in 0 until entries.length()) {
             val entry = entries.optJSONObject(i) ?: continue
-            if (ipa.isBlank()) {
-                val pronunciations = entry.optJSONArray("pronunciations") ?: JSONArray()
-                for (j in 0 until pronunciations.length()) {
-                    val pronunciation = pronunciations.optJSONObject(j) ?: continue
-                    if (pronunciation.optString("type").equals("ipa", true)) {
-                        val candidate = pronunciation.optString("text").trim()
-                        if (candidate.isNotBlank()) { ipa = candidate; break }
-                    }
-                }
-            }
             val senses = entry.optJSONArray("senses") ?: JSONArray()
             for (j in 0 until senses.length()) senses.optJSONObject(j)?.let { sense ->
                 sense.put("_partOfSpeech", entry.optString("partOfSpeech"))
                 allSenses += sense
             }
         }
-        val useful = allSenses
-        val definitions = useful.mapNotNull { it.optString("definition").trim().takeIf(String::isNotBlank) }.distinct().take(4)
-        if (definitions.isEmpty()) throw IllegalStateException("사전 결과가 없습니다")
-        val samples = useful.flatMap { sense ->
+        val allDefinitions = allSenses.mapNotNull { it.optString("definition").trim().takeIf(String::isNotBlank) }.distinct()
+        if (allDefinitions.isEmpty()) throw IllegalStateException("사전 결과가 없습니다")
+        val samples = allSenses.flatMap { sense ->
             val examples = sense.optJSONArray("examples") ?: JSONArray()
             (0 until examples.length()).mapNotNull { examples.optString(it).trim().takeIf(String::isNotBlank) }
         }.filter { SentenceExamples.isSentence(it) }.distinct().take(3)
-        val english = definitions.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
-        val examples = if (samples.isEmpty()) fallbackExample(q) else samples.joinToString("\n")
-        val korean = KoreanLexicalMeanings.format(useful.map { sense ->
+        val korean = KoreanLexicalMeanings.format(allSenses.map { sense ->
             val translations = sense.optJSONArray("translations") ?: JSONArray()
             val words = (0 until translations.length()).mapNotNull { index ->
                 val translation = translations.optJSONObject(index) ?: return@mapNotNull null
@@ -496,10 +479,10 @@ class MainActivity : Activity() {
             }
             KoreanDictionarySense(sense.optString("_partOfSpeech"), words)
         })
-        return Triple(english, korean, examples)
+        return OnlineResult(numbered(allDefinitions.take(4)), korean, samples, allDefinitions.joinToString("\n"))
     }
 
-    private fun fetchLegacyDictionary(q: String): Triple<String, String, String> {
+    private fun fetchLegacyDictionary(q: String): OnlineResult {
         val encoded = URLEncoder.encode(q, "UTF-8").replace("+", "%20")
         val root = JSONArray(http("https://api.dictionaryapi.dev/api/v2/entries/en/$encoded", 2500, 4000))
         val json = root.optJSONObject(0) ?: throw IllegalStateException("사전 결과가 없습니다")
@@ -514,39 +497,10 @@ class MainActivity : Activity() {
             }
         }
         if (definitions.isEmpty()) throw IllegalStateException("정의를 찾지 못했습니다")
-        val phonetics = json.optJSONArray("phonetics") ?: JSONArray()
-        var ipa = ""
-        for (i in 0 until phonetics.length()) {
-            val p = phonetics.optJSONObject(i) ?: continue
-            val candidate = p.optString("text").trim()
-            if (candidate.startsWith("/") || candidate.startsWith("[")) { ipa = candidate; break }
-        }
-        val english = definitions.take(4).mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
-        val examples = if (samples.isEmpty()) fallbackExample(q) else samples.take(3).joinToString("\n")
-        return Triple(english, "", examples)
+        return OnlineResult(numbered(definitions.take(4)), "", samples.take(3), definitions.joinToString("\n"))
     }
 
-    private fun fallbackExample(word: String): String = "I heard “$word” in a conversation today."
-    private fun bilingualFallbackExample(word: String): String =
-        "${fallbackExample(word)}\t오늘 대화에서 “$word”라는 표현을 들었습니다."
-
-    private fun examplePairs(stored: String): List<Pair<String, String>> = stored.lines().mapNotNull { line ->
-        val parts = line.split('\t', limit = 2)
-        val english = parts.firstOrNull()?.trim().orEmpty()
-        if (!SentenceExamples.isSentence(english)) null else english to parts.getOrElse(1) { "" }.trim()
-    }
-
-    private fun displayExamples(stored: String): String = examplePairs(stored)
-        .joinToString("\n") { (en, ko) -> if (ko.isBlank()) en else "$en\n$ko" }
-
-    private fun naturalizeKorean(word: String, dictionaryGloss: String): String {
-        // Add natural, sense-aware Korean glosses for common inflected forms whose
-        // single-word database gloss would otherwise hide the contextual meaning.
-        return when (word.trim().lowercase(Locale.ROOT)) {
-            "stuck" -> "끼어 움직이지 않는; (일이나 문제 해결이) 막힌, 진전이 없는"
-            else -> dictionaryGloss.trim().ifBlank { "한글 뜻을 찾지 못했습니다." }
-        }
-    }
+    private fun numbered(lines: List<String>) = lines.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
 
     private fun http(address: String, connectTimeout: Int = 3500, readTimeout: Int = 5000): String {
         val requestId = requestContext.get()
@@ -577,11 +531,6 @@ class MainActivity : Activity() {
             }
             wordRow.addView(saveButton, LinearLayout.LayoutParams(72.dp(), 40.dp()).apply { leftMargin = 6.dp() })
         }
-        wordRow.addView(button("Anki", 0xfffff2d8.toInt(), 0xff805c20.toInt()).apply {
-            textSize = 12f
-            contentDescription = "AnkiDroid 카드 보내기"
-            setOnClickListener { sendToAnki(e) }
-        }, LinearLayout.LayoutParams(60.dp(), 40.dp()).apply { leftMargin = 6.dp() })
         card.addView(wordRow)
         section(card, "한글 의미", e.korean)
         val dictionaryLinks = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -599,12 +548,9 @@ class MainActivity : Activity() {
         card.addView(dictionaryLinks)
         section(card, "English definition", e.english)
         val pairs = examplePairs(e.examples)
-        val exampleTitle = when {
-            e.examples == bilingualFallbackExample(e.word) -> "표현을 언급하는 예문"
-            pairs.any { it.second.isNotBlank() } -> "예문 · 한국어 해석"
-            else -> "영어 예문"
+        if (pairs.isNotEmpty()) {
+            section(card, if (pairs.any { it.second.isNotBlank() }) "예문 · 한국어 해석" else "영어 예문", displayExamples(e.examples))
         }
-        section(card, exampleTitle, displayExamples(e.examples))
         val credit = label(e.source.ifBlank { "의미별 자체 정리 · 직접 작성한 한영 예문" }, 10, false, 0xff64748b.toInt()).apply {
             setPadding(0, 12.dp(), 0, 0)
         }
@@ -619,26 +565,6 @@ class MainActivity : Activity() {
     }
 
     private fun speak(text: String) { wordSpeaker.speak(text) }
-
-    private fun sendToAnki(entry: WordEntry) {
-        val e = entry.studyVersion()
-        val back = buildString {
-            append(e.korean)
-            if (e.english.isNotBlank()) append("\n\n").append(e.english)
-            if (e.examples.isNotBlank()) append("\n\n").append(displayExamples(e.examples))
-        }
-        val intent = Intent(Intent.ACTION_SEND).apply {
-            type = "text/plain"
-            setPackage("com.ichi2.anki")
-            putExtra(Intent.EXTRA_SUBJECT, e.word)
-            putExtra(Intent.EXTRA_TEXT, back)
-        }
-        if (intent.resolveActivity(packageManager) == null) {
-            toast("AnkiDroid를 설치한 뒤 다시 시도해 주세요.")
-        } else {
-            startActivity(intent)
-        }
-    }
 
     private fun updateTabs() {
         if (!::searchTab.isInitialized || !::savedTab.isInitialized) return
@@ -667,7 +593,8 @@ class MainActivity : Activity() {
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
             val openEntry = {
                 AlertDialog.Builder(this@MainActivity).setTitle(e.word)
-                    .setMessage("한글 의미\n" + e.korean + "\n\nEnglish definition\n" + e.english + "\n\n예문 · 한국어 해석\n" + displayExamples(e.examples))
+                    .setMessage("한글 의미\n" + e.korean + "\n\nEnglish definition\n" + e.english +
+                        displayExamples(e.examples).let { if (it.isBlank()) "" else "\n\n예문\n$it" })
                     .setNeutralButton("🔊 듣기") { _, _ -> speak(e.word) }
                     .setPositiveButton("닫기", null).show()
             }
@@ -697,16 +624,15 @@ class MainActivity : Activity() {
     private fun createXlsx() {
         val entries = db.all()
         if (entries.isEmpty()) { toast("내보낼 저장 단어가 없습니다"); return }
-        val choices = arrayOf("단어·뜻·영어 예문(한글 해석 병기)", "한글 예문 해석 + 영어 예문", "영어 예문만", "Anki용 CSV (앞면: 단어 / 뒷면: 뜻·예문)")
+        val choices = arrayOf("단어·뜻·영어 예문(한글 해석 병기)", "한글 예문 해석 + 영어 예문", "영어 예문만")
         AlertDialog.Builder(this).setTitle("내보내기 형식").setItems(choices) { _, which ->
             exportFormat = which + 1
             val name = when (which) {
                 1 -> "영어예문_한영.xlsx"
                 2 -> "영어예문.xlsx"
-                3 -> "Anki_영어단어장.csv"
                 else -> "영어단어장.xlsx"
             }
-            val mime = if (exportFormat == 4) "text/csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            val mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 91)
             }
@@ -736,24 +662,6 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun makeAnkiCsv(originalEntries: List<WordEntry>): String {
-        fun field(value: String) = "\"" + value.replace("\"", "\"\"").replace("\n", "<br>") + "\""
-        return buildString {
-            append("\uFEFF앞면,뒷면\n")
-            originalEntries.map { it.studyVersion() }.forEach { e ->
-                val back = buildString {
-                    append(e.korean)
-                    if (e.english.isNotBlank()) append("\n\n").append(e.english)
-                    if (e.examples.isNotBlank()) append("\n\n").append(displayExamples(e.examples))
-                }
-                append(field(e.word)).append(',').append(field(back)).append('\n')
-            }
-        }
-    }
-
-    private fun makeWorkbook(originalEntries: List<WordEntry>): ByteArray = ExportWorkbook.make(originalEntries, exportFormat)
-
-    private fun xml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;").replace("\n", "&#10;")
     private fun installHorizontalSwipe(view: View, action: () -> Unit) {
         var downX = 0f
         var downY = 0f

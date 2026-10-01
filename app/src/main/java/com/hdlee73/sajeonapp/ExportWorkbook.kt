@@ -5,8 +5,8 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 internal object ExportWorkbook {
+/** Builds an .xlsx workbook (format 1–3) from saved entries. */
 fun make(originalEntries: List<WordEntry>, exportFormat: Int): ByteArray {
-    if (exportFormat == 4) return makeAnkiCsv(originalEntries).toByteArray(Charsets.UTF_8)
     val entries = originalEntries.map { it.studyVersion() }
     val rows = when (exportFormat) {
         2 -> mutableListOf(listOf("예문 한글 해석", "영어 예문")).apply {
@@ -37,37 +37,15 @@ fun make(originalEntries: List<WordEntry>, exportFormat: Int): ByteArray {
         put("xl/worksheets/sheet2.xml", sourceSheet)
     }; return out.toByteArray()
 }
+}
 
-
-
-private fun examplePairs(stored: String): List<Pair<String, String>> = stored.lines().mapNotNull { line ->
+internal fun examplePairs(stored: String): List<Pair<String, String>> = stored.lines().mapNotNull { line ->
     val parts = line.split('\t', limit = 2)
     val english = parts.firstOrNull()?.trim().orEmpty()
     if (!SentenceExamples.isSentence(english)) null else english to parts.getOrElse(1) { "" }.trim()
 }
 
-private fun displayExamples(stored: String): String = examplePairs(stored)
+internal fun displayExamples(stored: String): String = examplePairs(stored)
     .joinToString("\n") { (en, ko) -> if (ko.isBlank()) en else "$en\n$ko" }
 
-
-
 private fun xml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;").replace("\n", "&#10;")
-
-
-private fun makeAnkiCsv(originalEntries: List<WordEntry>): String {
-    fun field(value: String) = "\"" + value.replace("\"", "\"\"").replace("\n", "<br>") + "\""
-    return buildString {
-        append("\uFEFF앞면,뒷면\n")
-        originalEntries.map { it.studyVersion() }.forEach { e ->
-            val back = buildString {
-                append(e.korean)
-                if (e.english.isNotBlank()) append("\n\n").append(e.english)
-                if (e.examples.isNotBlank()) append("\n\n").append(displayExamples(e.examples))
-            }
-            append(field(e.word)).append(',').append(field(back)).append('\n')
-        }
-    }
-}
-
-
-}

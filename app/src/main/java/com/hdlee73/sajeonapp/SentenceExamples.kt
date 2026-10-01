@@ -7,10 +7,10 @@ internal object SentenceExamples {
         return clean.lastOrNull() in listOf('.', '!', '?') &&
             Regex("[A-Za-z]+(?:'[A-Za-z]+)?").findAll(clean).count() >= 3
     }
-    fun clean(stored: String, word: String): String {
-        val sentences = stored.lines().filter { isSentence(it.substringBefore('\t')) }
-        return sentences.joinToString("\n").ifBlank {
-            "I heard “$word” in a conversation today.\t오늘 대화에서 “$word”라는 표현을 들었습니다."
-        }
-    }
+    /** Keep real example sentences only; older versions stored a placeholder sentence. */
+    fun clean(stored: String): String =
+        stored.lines().filter { line ->
+            val english = line.substringBefore('\t')
+            isSentence(english) && !(english.startsWith("I heard “") && english.endsWith("in a conversation today."))
+        }.joinToString("\n")
 }

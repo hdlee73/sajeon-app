@@ -1,20 +1,14 @@
 # Data credits
 
-This application includes the Open English-Korean Dictionary by the LexiSnap project team, distributed under Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0):
+The bundled offline dictionary (`word_dictionary.sqlite`) and example corpus are built in CI by `tools/build_learning_data.py` from these sources. Each record keeps the license of its source; the combined file does not relicense them.
 
-- Repository: https://github.com/jhseo1211/open-english-korean-dict
-- Pinned source snapshot: `92cbfe63deee1ccead2c42677027d8b4a305b2c7`
-- License: https://creativecommons.org/licenses/by-sa/4.0/
+- **Korean Wiktionary (한국어 위키낱말사전) English entries** via Kaikki.org / Wiktextract — CC BY-SA 4.0 — https://ko.wiktionary.org/ · https://kaikki.org/kowiktionary/
+- **National Institute of Korean Language, Korean Basic Dictionary (국립국어원 한국어기초사전)**, English equivalents reverse-indexed to Korean headwords — CC BY-SA 2.0 KR — https://krdict.korean.go.kr/ (mirror: binjang/NIKL-dictionary-parser, commit `52ffffdc0a6fd8d00d7dce45cffcc0930ebbdaea`)
+- **Tatoeba** English–Korean sentence pairs, provided by ManyThings.org/anki (Charles Kelly) — CC BY 2.0 FR — https://www.manythings.org/anki/ ; contributor credits are kept per sentence and shown in the app and in the Excel “출처” sheet.
 
-The upstream project credits these data sources:
+Online data:
 
-- kengdic — CC BY-SA 3.0 — https://github.com/garfieldnate/kengdic
-- cc-kedict — CC BY-SA 3.0 — https://github.com/mhagiwara/cc-kedict
-- ipa-dict — MIT — https://github.com/open-dict-data/ipa-dict
-- CMU Pronouncing Dictionary — BSD — http://www.speech.cs.cmu.edu/cgi-bin/cmudict
-- CEFR-J Wordlist — CC BY-SA 4.0 — https://github.com/openlanguageprofiles/olp-en-cefrj
-- NGSL — CC BY-SA — http://www.newgeneralservicelist.org
-- NAWL — CC BY-SA — http://www.newacademicwordlist.org
-- Wiktionary via kaikki.org — CC BY-SA 3.0 — https://kaikki.org
+- English definitions, examples and Korean lexical translations: [FreeDictionaryAPI.com](https://freedictionaryapi.com/) (English Wiktionary content, CC BY-SA 4.0), with [dictionaryapi.dev](https://dictionaryapi.dev/) as a fallback.
+- Spelling suggestions when nothing is found: [Datamuse API](https://www.datamuse.com/api/).
 
-English definitions, pronunciations, and examples are served by [FreeDictionaryAPI.com](https://freedictionaryapi.com/) from Wiktionary content, CC BY-SA 4.0. The app attributes these sources in the result view.
+Korean meanings are never machine-translated. Full details: `app/src/main/assets/DATA_SOURCES.txt`.

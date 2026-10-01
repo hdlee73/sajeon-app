@@ -18,7 +18,7 @@ class ExportWorker(appContext: Context, params: WorkerParameters) : CoroutineWor
             val bytes = ExportWorkbook.make(EntryDb(applicationContext).all(), format)
             applicationContext.contentResolver.openOutputStream(Uri.parse(uriText))?.use { it.write(bytes) }
                 ?: return@withContext Result.retry()
-            notifyComplete(if (format == 4) "Anki용 CSV 파일을 저장했습니다." else "단어장 파일을 저장했습니다.")
+            notifyComplete("단어장 파일을 저장했습니다.")
             Result.success()
         } catch (_: Exception) {
             Result.retry()

@@ -15,7 +15,10 @@ class SentenceExamplesTest {
         assertTrue(SentenceExamples.isSentence("He said, \"Please take off your shoes.\""))
     }
     @Test fun cleansSavedFragmentsAndKeepsTranslations() {
-        assertEquals("We paid off the loan.\t대출을 다 갚았다.", SentenceExamples.clean("a loan\nWe paid off the loan.\t대출을 다 갚았다.", "pay off"))
-        assertTrue(SentenceExamples.isSentence(SentenceExamples.clean("a loan", "loan").substringBefore('\t')))
+        assertEquals("We paid off the loan.\t대출을 다 갚았다.", SentenceExamples.clean("a loan\nWe paid off the loan.\t대출을 다 갚았다."))
+    }
+    @Test fun noPlaceholderSentenceIsInventedOrKept() {
+        assertEquals("", SentenceExamples.clean("a loan"))
+        assertEquals("", SentenceExamples.clean("I heard “loan” in a conversation today.\t오늘 대화에서 “loan”라는 표현을 들었습니다."))
     }
 }

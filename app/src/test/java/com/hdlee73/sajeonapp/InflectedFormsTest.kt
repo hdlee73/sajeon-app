@@ -27,6 +27,15 @@ class InflectedFormsTest {
         assertTrue(form.korean("1. 먹다").contains("먹다"))
         assertEquals("[동사] eat의 과거분사", form.korean(null))
     }
+    @Test fun misspellingsAndVariantSpellingsPointToTheirHeadword() {
+        val misspelling = InflectedForms.find("1. Misspelling of curiosity.")!!
+        assertEquals("curiosity", misspelling.base)
+        assertEquals("curiosity의 잘못된 철자", misspelling.korean(null))
+        assertEquals("colour", InflectedForms.find("Alternative spelling of colour")?.base)
+        assertEquals("show", InflectedForms.find("Obsolete form of show.")?.base)
+        assertNull(InflectedForms.find("Form of address used for kings."))
+    }
+
     @Test fun reviewedStruckIncludesRealUsage() {
         val struck = ReviewedEntries.lookup("struck")!!
         assertTrue(struck.korean.contains("strike의 과거형·과거분사"))

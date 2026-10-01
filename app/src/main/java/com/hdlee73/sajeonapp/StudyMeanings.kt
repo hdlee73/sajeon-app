@@ -19,4 +19,4 @@ internal object StudyMeanings {
 }
 
 internal fun WordEntry.studyVersion(): WordEntry =
-    copy(korean = StudyMeanings.limit(korean), english = StudyMeanings.limit(english), examples = SentenceExamples.clean(examples, word))
+    copy(korean = StudyMeanings.limit(korean), english = StudyMeanings.limit(english), examples = SentenceExamples.clean(examples))

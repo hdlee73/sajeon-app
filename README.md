@@ -16,3 +16,16 @@ Swipe a search-result card horizontally to save it. Swipe a saved-word row horiz
 ## v1.5.14: offline phrase suggestions
 
 The bundled SQLite dictionary now creates an FTS4 index over every headword, including multi-word expressions. The dictionary cache is pre-opened after launch. When a typed prefix or partial phrase has local matches, the app shows those candidates immediately and does not wait for an online lookup. The disposable dictionary cache moved to v4; saved vocabulary is unaffected.
+
+## v1.6.0: Korean meanings for everyday words, Anki removed
+
+**Korean meanings for inflected and misspelled words.** Basic forms such as *went, ate, studied, cities, stopped, taught, bigger, children* used to show “등록된 영한 뜻풀이가 없습니다” because only the base word is a dictionary headword. The app now resolves irregular verbs, irregular plurals and comparatives from a built-in table, and regular -s/-es/-ies, -ed/-ied, -ing and -er/-est forms with spelling rules. A base word is used only when it is a real headword in the bundled dictionary, so the result is shown instantly and offline as “[변화형] go의 과거형” followed by the base word's senses. Rows that only said “ask의 과거형” now include *ask*'s senses as well, and headwords that are also irregular forms (*saw, felt, thought*) carry a one-line note.
+
+**Misspellings.** Online “Misspelling of …”, “Alternative spelling of …” and similar definitions now link to the correct headword's Korean meaning (e.g. *curiousity* → curiosity). When nothing is found, the app offers headwords one edit away from the query (offline) together with online suggestions, instead of only an empty message.
+
+**Search flow.** A local meaning is shown before the network lookup and is no longer replaced by sparser online translations. Phrase candidates no longer block the online lookup. Words without any Korean meaning can't be saved to the vocabulary list.
+
+**Reliability.** Bundled databases are copied to a temporary file and renamed only when complete, so an interrupted first launch can't leave a broken dictionary that makes every local lookup fail. Old cache copies (about 20 MB each) are deleted.
+
+**Removed.** The Anki button, AnkiDroid sharing and the Anki CSV export; the placeholder example sentence (“I heard … in a conversation today.”), which is also stripped from previously saved words; and unused machine-translation queue code.
+
