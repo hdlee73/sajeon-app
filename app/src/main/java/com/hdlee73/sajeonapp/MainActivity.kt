@@ -44,7 +44,7 @@ private class LocalGlossary(private val context: Context) {
     private var database: SQLiteDatabase? = null
     // The saved vocabulary database (sajeon.db) is separate and never touched here.
     @Synchronized private fun open(): SQLiteDatabase? =
-        database ?: AssetDatabase.open(context, "word_dictionary.sqlite", "meaning_dictionary", 5)?.also { database = it }
+        database ?: AssetDatabase.open(context, "word_dictionary.sqlite", "meaning_dictionary")?.also { database = it }
     fun prewarm() { open() }
     fun contains(word: String): Boolean = lookup(word) != null
     /** Dictionary headwords one edit away from a misspelled query, common entries first. */
@@ -283,7 +283,7 @@ class MainActivity : Activity() {
 
     private fun showPage() { updateTabs(); if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
 
-    private data class OnlineResult(val english: String, val korean: String, val examples: List<String>, val allDefinitions: String)
+    private data class OnlineResult(val english: String, val korean: String, val examples: List<String>, val allDefinitions: String, val parts: List<String>)
 
     private fun lookup(q: String) {
         debounceHandler.removeCallbacks(debouncedSearch)
@@ -398,12 +398,28 @@ class MainActivity : Activity() {
             val formBaseKorean = formOf?.let { ReviewedEntries.lookup(it.base)?.korean ?: glossary.lookup(it.base)?.korean }
             val formBaseLocal = formOf?.let { glossary.lookup(it.base) }
             var usedAutoMeaning = false
+            var supplementCredit = ""
             val korean: String? = when {
                 offlineKorean != null -> {
                     // "wanted" is a headword (adjective) and also the past tense of "want".
                     val note = if (local != null && pointer == null && alsoForm == null && formOf != null && formBaseKorean != null)
                         BaseForm(formOf.base, formOf.form).note(formBaseKorean) + "\n" else ""
-                    note + offlineKorean
+                    var text = note + offlineKorean
+                    if (local != null && pointer == null) {
+                        // Each dictionary lists only the senses it has Korean words for (palm had just
+                        // the verb). Add words the Wiktionary translations know and, if a part of
+                        // speech of the English entry is still missing, the automatic dictionary's.
+                        val extras = MeaningMerge.extras(online.korean, null, text, 2).toMutableList()
+                        if (extras.isNotEmpty()) supplementCredit = "보충 뜻: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)"
+                        val missing = MeaningMerge.missingParts(MeaningMerge.combine(text, extras, emptyList()), online.parts)
+                        if (missing.isNotEmpty()) {
+                            val auto = autoMeaning(q, requestId)
+                            val more = auto?.let { MeaningMerge.extras(it.text, missing, text + " " + extras.joinToString(" "), 2) }.orEmpty()
+                            if (more.isNotEmpty()) { extras += more; supplementCredit = listOf(supplementCredit, MachineTranslation.CREDIT_SUPPLEMENT).filter { it.isNotBlank() }.joinToString("\n") }
+                        }
+                        text = MeaningMerge.combine(text, extras, online.parts)
+                    }
+                    text
                 }
                 formOf != null -> {
                     val baseGloss = formBaseKorean ?: online.korean.ifBlank { null }
@@ -430,7 +446,7 @@ class MainActivity : Activity() {
             }
             if (stale()) return@submit
             val koreanCredit = when {
-                offlineKorean != null -> offlineCredit
+                offlineKorean != null -> listOf(offlineCredit, supplementCredit).filter { it.isNotBlank() }.joinToString("\n")
                 formOf != null && formBaseLocal != null -> localMeaningCredit(formBaseLocal, formOf.base)
                 usedAutoMeaning -> MachineTranslation.CREDIT_MEANING
                 online.korean.isNotBlank() -> "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)"
@@ -450,7 +466,7 @@ class MainActivity : Activity() {
             present(entry, when {
                 korean == null -> "한글 뜻풀이를 찾지 못했습니다"
                 missingTranslations > 0 -> "검색 결과 · 예문 해석을 불러오지 못했습니다. 다시 검색하면 해석이 추가됩니다."
-                usedAutoMeaning || machineExamples -> "검색 결과 · 일부 자동 번역 포함"
+                usedAutoMeaning || machineExamples || supplementCredit.contains("자동 번역") -> "검색 결과 · 일부 자동 번역 포함"
                 else -> "검색 결과"
             }, canSave = korean != null, suggestions = spelling)
         }
@@ -482,6 +498,7 @@ class MainActivity : Activity() {
 
     private fun localMeaningCredit(local: LocalMeaning?, word: String): String = when (local?.source) {
         "KOWIKTIONARY" -> "한국어 위키낱말사전 / Kaikki.org 영한 표제어 (CC BY-SA 4.0)\nhttps://ko.wiktionary.org/wiki/" + Uri.encode(word)
+        "MERGED" -> "한국어 위키낱말사전 / Kaikki.org 영한 표제어 (CC BY-SA 4.0)\n국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)\nhttps://ko.wiktionary.org/wiki/" + Uri.encode(word)
         "NIKL" -> "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)"
         else -> "Wiktionary 사전 원형·뜻풀이 / 자체 검토 자료"
     }
@@ -565,7 +582,8 @@ class MainActivity : Activity() {
             }
             KoreanDictionarySense(sense.optString("_partOfSpeech"), words)
         })
-        return OnlineResult(numbered(allDefinitions.take(4)), korean, samples, allDefinitions.joinToString("\n"))
+        val parts = (0 until entries.length()).mapNotNull { entries.optJSONObject(it)?.optString("partOfSpeech")?.takeIf(String::isNotBlank) }.distinct()
+        return OnlineResult(numbered(allDefinitions.take(4)), korean, samples, allDefinitions.joinToString("\n"), parts)
     }
 
     private fun fetchLegacyDictionary(q: String): OnlineResult {
@@ -583,7 +601,8 @@ class MainActivity : Activity() {
             }
         }
         if (definitions.isEmpty()) throw IllegalStateException("정의를 찾지 못했습니다")
-        return OnlineResult(numbered(definitions.take(4)), "", samples.take(3), definitions.joinToString("\n"))
+        val parts = (0 until meanings.length()).mapNotNull { meanings.optJSONObject(it)?.optString("partOfSpeech")?.takeIf(String::isNotBlank) }.distinct()
+        return OnlineResult(numbered(definitions.take(4)), "", samples.take(3), definitions.joinToString("\n"), parts)
     }
 
     private fun numbered(lines: List<String>) = lines.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")

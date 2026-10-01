@@ -30,11 +30,11 @@ class MachineTranslationTest {
         assertEquals("1. [명사] 호기심, 궁금증, 진기한 물건, 골동품", meaning.text)
     }
 
-    @Test fun senseWithoutKoreanIsSkippedAndLimitIsFour() {
-        val rows = (1..6).joinToString(",") { """["noun",["뜻$it"],null,"w",1]""" }
+    @Test fun senseWithoutKoreanIsSkippedAndListIsCapped() {
+        val rows = (1..9).joinToString(",") { """["noun",["뜻$it"],null,"w",1]""" }
         val json = """[[["뜻","w"]],[["verb",["abc"],null,"w",1],$rows]]"""
         val meaning = MachineTranslation.meaning(json, "w")!!
-        assertEquals(4, meaning.text.lines().size)
+        assertEquals(StudyMeanings.MAX_SENSES, meaning.text.lines().size)
         assertFalse(meaning.text.contains("abc"))
     }
 

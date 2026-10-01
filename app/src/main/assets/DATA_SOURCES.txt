@@ -22,7 +22,7 @@ Source: Korean Wiktionary contributors, distributed through Kaikki.org / Wiktext
 https://ko.wiktionary.org/
 https://kaikki.org/kowiktionary/%EC%98%81%EC%96%B4/index.html
 License: CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/
-Direct English headwords are preferred over the NIKL reverse index. Glosses are preserved and limited to four senses. Online Korean lexical translations come from FreeDictionaryAPI / English Wiktionary senses; English definitions are never machine-translated into Korean meanings.
+Direct English headwords lead; NIKL reverse-index senses are added only for parts of speech the direct entry lacks, ranked by NIKL learner level (records marked "MERGED" credit both sources). Glosses are preserved and limited to four senses. Online Korean lexical translations come from FreeDictionaryAPI / English Wiktionary senses; English definitions are never machine-translated into Korean meanings.
 Licenses remain attached to their respective source records; the combined file does not relicense NIKL-derived records. Complete adaptation scripts are included in tools/.
 
 Automatic translation fallback (online, labeled "자동 번역" in the app)

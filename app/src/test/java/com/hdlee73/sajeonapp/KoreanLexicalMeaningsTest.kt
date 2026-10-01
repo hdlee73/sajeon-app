@@ -14,9 +14,9 @@ class KoreanLexicalMeaningsTest {
     @Test fun ignoresAbsentKoreanRatherThanTranslatingDefinitions() {
         assertEquals("", KoreanLexicalMeanings.format(listOf(KoreanDictionarySense("noun", listOf("abc", "ㄱㄴ", "")))))
     }
-    @Test fun capsSensesAtFour() {
-        val result = KoreanLexicalMeanings.format((1..6).map { KoreanDictionarySense("noun", listOf("뜻 " + it)) })
-        assertEquals(4, result.lines().size)
+    @Test fun capsSensesAtTheDisplayLimit() {
+        val result = KoreanLexicalMeanings.format((1..9).map { KoreanDictionarySense("noun", listOf("뜻 " + it)) })
+        assertEquals(StudyMeanings.MAX_SENSES, result.lines().size)
     }
     @Test fun preliminaryHasCompleteBilingualExamples() {
         val entry = ReviewedEntries.lookup("preliminary")!!

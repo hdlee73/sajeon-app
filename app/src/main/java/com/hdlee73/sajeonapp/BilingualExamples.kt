@@ -19,7 +19,7 @@ internal class BilingualExamples(private val activity: Context) {
     private var database: SQLiteDatabase? = null
     @Synchronized fun lookup(query: String): List<BilingualSentence> {
         return try {
-            val db = database ?: AssetDatabase.open(activity, "bilingual_examples.sqlite", "bilingual_examples", 2)
+            val db = database ?: AssetDatabase.open(activity, "bilingual_examples.sqlite", "bilingual_examples")
                 ?.also { database = it } ?: return emptyList()
             val token = Regex("[a-z]+(?:'[a-z]+)?").find(query.lowercase(Locale.ROOT))?.value ?: return emptyList()
             val matches = mutableListOf<BilingualSentence>()

@@ -11,6 +11,53 @@ POS = {"noun": "명사", "verb": "동사", "adj": "형용사", "adv": "부사", 
        "intj": "감탄사", "phrase": "숙어", "num": "수사", "name": "고유명사",
        "prefix": "접두사", "suffix": "접미사", "abbrev": "약어", "proverb": "속담"}
 
+def clean_gloss(gloss):
+    """Drop English explanations that Korean Wiktionary glosses carry in () or [] and 부록 links."""
+    text = gloss
+    for _ in range(5):  # nested parentheses: remove the innermost English-only ones first
+        before = text
+        text = re.sub(r"\s*\[[^\[\]가-힣]*[A-Za-z][^\[\]가-힣]*\]", "", text)
+        text = re.sub(r"\s*\((?:[^()가-힣]*[A-Za-z][^()가-힣]*)\)", "", text)
+        if text == before:
+            break
+    text = re.sub(r"\s*\(부록:[^)]*\)", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+def pos_of(line):
+    """Normalized Korean part of speech of a "[품사] ..." sense, or '' when it has none."""
+    match = re.match(r"\s*(?:\d+\.\s*)?\[([^\]]+)\]", line)
+    label = match.group(1) if match else ""
+    for key in ("대명사", "명사", "동사", "형용사"):
+        if key in label:
+            return key
+    if "관형사" in label:  # NIKL determiners are adjectives in English
+        return "형용사"
+    return label.strip()
+
+def merge_meanings(direct, nikl_text, max_direct=4, max_nikl=2):
+    """Korean-Wiktionary senses first. Wiktionary only keeps senses that have a Korean gloss, so a
+    whole part of speech can vanish (palm, date and match lost their noun senses, and the NIKL
+    entry used to be overwritten). NIKL senses (already ranked by learner level) are added only
+    for parts of speech the Wiktionary senses do not cover, which avoids padding well-covered
+    verbs like run or set with loosely related Korean verbs."""
+    merged = list(direct[:max_direct])
+    present = {pos_of(line) for line in merged if pos_of(line)}
+    extras, heads = [], set()
+    for line in (nikl_text or "").splitlines():
+        body = re.sub(r"^\d+\.\s*", "", line).strip()
+        pos = pos_of(body)
+        match = re.search(r"\]\s*([^:\]]+):|^([^:\[\]]+):", body)
+        head = next((g.strip() for g in match.groups() if g), "") if match else ""
+        if not head or head in heads:
+            continue
+        if merged and (not pos or pos in present):
+            continue
+        extras.append(body)
+        heads.add(head)
+        if len(extras) == max_nikl:
+            break
+    return merged + extras, bool(extras)
+
 def direct_records(lines):
     records = {}
     for line in lines:
@@ -27,8 +74,10 @@ def direct_records(lines):
             if len(labels) == 1:
                 pos = labels[0]
         for sense in entry.get("senses", []):
-            gloss = "; ".join(g.strip() for g in sense.get("glosses", [])
+            gloss = "; ".join(clean_gloss(g) for g in sense.get("glosses", [])
                               if isinstance(g, str) and re.search("[가-힣]", g))
+            if not re.search("[가-힣]", gloss):
+                continue
             if not gloss:
                 continue
             value = ("[" + pos + "] " if pos else "") + gloss
@@ -60,13 +109,16 @@ def add_direct_dictionary(root, destination):
     assert all(word in records for word in expected), "Missing ordinary English headword"
     with sqlite3.connect(destination) as db:
         db.execute("ALTER TABLE words ADD COLUMN source TEXT DEFAULT 'NIKL'")
-        new = 0
+        new = merged_count = 0
         for word, senses in records.items():
-            old = db.execute("SELECT 1 FROM words WHERE word=?", (word,)).fetchone()
+            old = db.execute("SELECT meaning_ko FROM words WHERE word=?", (word,)).fetchone()
             new += old is None
-            # Direct English -> Korean senses take priority over reverse synonyms.
-            korean = "\n".join(str(i + 1) + ". " + s for i, s in enumerate(senses[:4]))
-            db.execute("INSERT OR REPLACE INTO words(word,meaning_ko,meaning_en,ipa,source) VALUES(?,?,'','','KOWIKTIONARY')", (word, korean))
+            # Direct English -> Korean senses lead; NIKL senses fill in what they lack.
+            chosen, merged = merge_meanings(senses, old[0] if old else "")
+            merged_count += merged
+            korean = "\n".join(str(i + 1) + ". " + s for i, s in enumerate(chosen))
+            db.execute("INSERT OR REPLACE INTO words(word,meaning_ko,meaning_en,ipa,source) VALUES(?,?,'','',?)",
+                       (word, korean, "MERGED" if merged else "KOWIKTIONARY"))
         total = db.execute("SELECT count(*) FROM words").fetchone()[0]
         # The primary key handles exact lookup; FTS4 handles partial multi-word input.
         db.execute("DROP TABLE IF EXISTS words_fts")
@@ -74,4 +126,5 @@ def add_direct_dictionary(root, destination):
         db.execute("INSERT INTO words_fts(docid, word) SELECT rowid, word FROM words")
         indexed = db.execute("SELECT count(*) FROM words_fts").fetchone()[0]
         assert indexed == total, "Incomplete FTS phrase index"
-    print("Direct Korean-Wiktionary headwords:", len(records), "new headwords:", new, "total:", total)
+    print("Direct Korean-Wiktionary headwords:", len(records), "new headwords:", new,
+          "merged with NIKL:", merged_count, "total:", total)

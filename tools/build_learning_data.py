@@ -18,6 +18,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '52ffffdc0a6fd8d00d7dce45cffcc0930ebbdaea'
 FILES = [f'{i}_5000_20240101.json' for i in range(1, 11)] + ['11_1960_20240101.json']
+# NIKL marks headwords learners meet early; the source files are sorted by Korean spelling, so
+# cutting at the first few senses would keep ㄱ-words and drop common ones (달리다 for "run").
+LEVEL_RANK = {'초급': 0, '중급': 1, '고급': 2}
+MAX_NIKL_SENSES = 6
 
 def as_list(value):
     return value if isinstance(value, list) else [value] if value else []
@@ -47,6 +51,19 @@ def download(name):
                 raise
             time.sleep(1)
 
+def select_senses(senses, limit=MAX_NIKL_SENSES):
+    """Most learner-relevant senses first, one per Korean headword, original order breaking ties."""
+    ranked = sorted(enumerate(senses), key=lambda pair: (pair[1][2], pair[0]))
+    chosen, heads = [], set()
+    for _, item in ranked:
+        if item[3] in heads:
+            continue
+        heads.add(item[3])
+        chosen.append(item)
+        if len(chosen) == limit:
+            break
+    return chosen
+
 def build_dictionary(paths, destination):
     records = {}
     for path in paths:
@@ -55,7 +72,9 @@ def build_dictionary(paths, destination):
         for entry in entries:
             lemmas = as_list(entry.get('Lemma'))
             head = next((features(lemma.get('feat')).get('writtenForm', '') for lemma in lemmas), '')
-            pos = features(entry.get('feat')).get('partOfSpeech', '').strip()
+            entry_features = features(entry.get('feat'))
+            pos = entry_features.get('partOfSpeech', '').strip()
+            rank = LEVEL_RANK.get(entry_features.get('vocabularyLevel', '').strip(), 3)
             for sense in as_list(entry.get('Sense')):
                 korean = features(sense.get('feat')).get('definition', '').strip()
                 if not head or not korean:
@@ -70,8 +89,8 @@ def build_dictionary(paths, destination):
                         if not re.fullmatch(r"[a-z][a-z '\-]*", lemma):
                             continue
                         # Exact translated headwords only; no synonym inference.
-                        item = (f'[{pos}] {head}: {korean}' if pos else f'{head}: {korean}', english)
-                        if item not in records.setdefault(lemma, []):
+                        item = (f'[{pos}] {head}: {korean}' if pos else f'{head}: {korean}', english, rank, head)
+                        if all(item[:2] != known[:2] for known in records.setdefault(lemma, [])):
                             records[lemma].append(item)
         del entries
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -79,13 +98,15 @@ def build_dictionary(paths, destination):
     with sqlite3.connect(destination) as db:
         db.execute('CREATE TABLE words(word TEXT PRIMARY KEY COLLATE NOCASE, meaning_ko TEXT, meaning_en TEXT, ipa TEXT)')
         for word, senses in records.items():
-            selected = senses[:6]
+            selected = select_senses(senses)
             ko = '\n'.join(f'{i+1}. {s[0]}' for i,s in enumerate(selected))
             en = '\n'.join(f'{i+1}. {s[1]}' for i,s in enumerate(selected) if s[1])
             db.execute('INSERT INTO words VALUES(?,?,?,?)', (word, ko, en, ''))
     assert len(records) > 10000, f'Incomplete dictionary: {len(records)}'
     assert 'spontaneous' in records
-    assert all('자적:' not in ko for ko, _ in records['spontaneous'])
+    assert all('자적:' not in item[0] for item in records['spontaneous'])
+    assert any('달리다' in item[0] for item in select_senses(records['run'])), 'run must keep 달리다'
+    assert any('손바닥' in item[0] for item in select_senses(records['palm']))
     print(f'Built {len(records)} exact English headwords from NIKL equivalents')
 
 def build_examples(destination):

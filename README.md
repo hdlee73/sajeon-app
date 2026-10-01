@@ -39,3 +39,14 @@ The bundled SQLite dictionary now creates an FTS4 index over every headword, inc
 
 Note: the fallback and example translations send the searched word and example sentences to `translate.googleapis.com` (the unofficial `gtx` client, no key). Words found in the bundled dictionary with a complete offline entry never leave the device.
 
+## v1.6.2: fuller Korean meanings, dictionary refreshes on update
+
+**Why meanings were incomplete (e.g. *palm* showed only “[동사] 손 안에 감추다”).** Korean Wiktionary only supplies senses that have a Korean gloss, so a whole part of speech could be missing (*palm, date, match* lost their noun senses), and the build then overwrote the National Institute of Korean Language (NIKL) entry for the same word instead of combining them. NIKL senses were also cut after the first six in Korean alphabetical order, which dropped common words (달리다 for *run*).
+
+- The build now **merges** both dictionaries: Wiktionary senses first, then NIKL senses only for parts of speech Wiktionary lacks. NIKL senses are ranked by the dictionary's learner level (초급 → 중급 → 고급) with one sense per Korean headword.
+- English explanations that Wiktionary glosses carry in parentheses (“(To move from one place to another.)”) are removed.
+- In the app, Korean words from the online Wiktionary translations that the list does not have yet are added, and a part of speech of the English entry that is still missing is filled from the automatic dictionary (labeled 자동 번역). Senses follow the English entry's order (e.g. noun before verb), and up to six are shown instead of four.
+- The bundled dictionary cache is now named after the installed app version, so **installing an update replaces the dictionary automatically**; old cached copies are deleted.
+
+The app still cannot tell which sense an example sentence uses; it lists the senses and leaves that choice to the reader.
+

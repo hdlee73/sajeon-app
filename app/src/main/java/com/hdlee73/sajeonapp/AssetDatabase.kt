@@ -6,14 +6,21 @@ import android.database.sqlite.SQLiteDatabase
 /**
  * Copies a bundled read-only SQLite asset to app storage and opens it.
  *
- * The copy goes to a temporary file and is renamed only after it completes, so an
- * interrupted first launch can no longer leave a truncated database that silently made
- * every local lookup fail. A file that cannot be opened is deleted and copied again once.
- * Older cache versions of the same asset are removed to free storage.
+ * The cached copy is named after the installed app version, so installing an update replaces the
+ * dictionary automatically; no version number has to be bumped by hand when the data changes.
+ * The copy goes to a temporary file and is renamed only after it completes, so an interrupted first
+ * launch can't leave a truncated database. A file that cannot be opened is deleted and copied again
+ * once, and cached copies from other versions are removed to free storage.
  */
 internal object AssetDatabase {
-    fun open(context: Context, asset: String, prefix: String, version: Int): SQLiteDatabase? {
-        val file = context.getDatabasePath("${prefix}_v$version.sqlite")
+    @Suppress("DEPRECATION")
+    private fun installedVersion(context: Context): Long = try {
+        val info = context.packageManager.getPackageInfo(context.packageName, 0)
+        if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong()
+    } catch (_: Exception) { 0L }
+
+    fun open(context: Context, asset: String, prefix: String): SQLiteDatabase? {
+        val file = context.getDatabasePath("${prefix}_${installedVersion(context)}.sqlite")
         file.parentFile?.listFiles()?.forEach { old ->
             if (old.name.startsWith(prefix) && old.name != file.name) old.delete()
         }
