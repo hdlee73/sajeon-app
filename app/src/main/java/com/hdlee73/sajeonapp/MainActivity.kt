@@ -252,7 +252,12 @@ class MainActivity : Activity() {
             try {
                 val online = fetchDictionary(q)
                 // Korean meanings must be dictionary records, never machine-translated definitions.
-                val korean = local?.korean?.takeIf { it.isNotBlank() }
+                val inflection = InflectedForms.find(online.first)
+                val baseMeaning = inflection?.let { form ->
+                    ReviewedEntries.lookup(form.base)?.korean ?: glossary.lookup(form.base)?.korean
+                }
+                val korean = inflection?.korean(baseMeaning ?: local?.korean)
+                    ?: local?.korean?.takeIf { it.isNotBlank() }
                     ?: "등록된 영한 뜻풀이가 없습니다. 아래 네이버 사전에서 확인해 주세요."
                 val sentences = online.third.split("\n").map { it.trim() }
                     .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
@@ -262,8 +267,8 @@ class MainActivity : Activity() {
                     if (ko.isBlank()) "$sentence\t(해석을 불러오지 못했습니다)" else "$sentence\t$ko"
                 }.joinToString("\n")
                 val entry = WordEntry(word = q, ipa = "", korean = korean,
-                    english = local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
-                    source = (if (local != null) "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)" else "FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)") +
+                    english = if (inflection != null) online.first else local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
+                    source = (if (local != null || baseMeaning != null) "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)" else "FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)") +
                         (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba" else "\n일반 예문 해석: Google ML Kit 자동 번역"))
                 if (!korean.contains("불러오지 못") && !bilingual.contains("불러오지 못")) {
                     synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
@@ -368,10 +373,7 @@ class MainActivity : Activity() {
             val senses = entry.optJSONArray("senses") ?: JSONArray()
             for (j in 0 until senses.length()) senses.optJSONObject(j)?.let { allSenses += it }
         }
-        val useful = allSenses.filterNot { sense ->
-            val tags = sense.optJSONArray("tags") ?: JSONArray()
-            (0 until tags.length()).any { tags.optString(it).equals("form of", true) }
-        }.ifEmpty { allSenses }
+        val useful = allSenses
         val definitions = useful.mapNotNull { it.optString("definition").trim().takeIf(String::isNotBlank) }.distinct().take(4)
         if (definitions.isEmpty()) throw IllegalStateException("사전 결과가 없습니다")
         val samples = useful.flatMap { sense ->

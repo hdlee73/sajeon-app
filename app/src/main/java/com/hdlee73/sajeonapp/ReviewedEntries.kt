@@ -7,6 +7,10 @@ internal object ReviewedEntries {
     private fun entry(word: String, korean: String, english: String, examples: String) =
         WordEntry(word = word, ipa = "", korean = if (korean.startsWith("[")) korean else (if (word == "stuck") "[형용사]\n" else "[구동사]\n") + korean, english = english, examples = examples)
     private val entries = listOf(
+        entry("struck",
+            "[동사] strike의 과거형·과거분사\n1. 치다, 때리다\n2. (생각·인상이) 문득 떠오르다, 강하게 다가오다\n3. (번개·재해 등이) 덮치다",
+            "1. Simple past and past participle of strike.",
+            "The ball struck the window.\t공이 창문에 부딪혔다.\nAn idea struck me on the way home.\t집으로 돌아오는 길에 문득 아이디어가 떠올랐다.\nLightning struck a tree near our house.\t우리 집 근처 나무에 벼락이 떨어졌다."),
         entry("spontaneous",
             "[형용사]\n1. (계획하지 않고) 즉흥적인\n2. (강요받지 않고) 자발적인, 스스로 우러나오는\n3. (반응·과정 등이) 외부 작용 없이 저절로 일어나는, 자연 발생적인",
             "1. Done without advance planning.\n2. Arising from a person's own willingness or feelings.\n3. Occurring without an external cause.",
