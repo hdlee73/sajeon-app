@@ -463,6 +463,10 @@ class MainActivity : Activity() {
         wordRow.addView(label(e.word, 25, true, dark), LinearLayout.LayoutParams(0, -2, 1f))
         wordRow.addView(button("🔊 듣기").apply { setOnClickListener { speak(e.word) } })
         card.addView(wordRow)
+        if (canSave) {
+            val saveButton = button("이 단어 저장").apply { setOnClickListener { db.save(e); toast("저장했습니다"); renderSaved(); isEnabled = false; text = "저장됨" } }
+            card.addView(saveButton, LinearLayout.LayoutParams(-1, 48.dp()).apply { topMargin = 8.dp() })
+        }
         section(card, "한글 의미", e.korean)
         val dictionaryLinks = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         dictionaryLinks.addView(label("네이버 ", 12, false, 0xff64748b.toInt()))
@@ -483,10 +487,6 @@ class MainActivity : Activity() {
             setPadding(0, 12.dp(), 0, 0)
         }
         card.addView(credit)
-        if (canSave) {
-            val saveButton = button("이 단어 저장").apply { setOnClickListener { db.save(e); toast("저장했습니다"); renderSaved(); isEnabled = false; text = "저장됨" } }
-            card.addView(saveButton, LinearLayout.LayoutParams(-1, 48.dp()).apply { topMargin = 14.dp() })
-        }
         resultBox.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8.dp(); bottomMargin = 12.dp() })
     }
 
