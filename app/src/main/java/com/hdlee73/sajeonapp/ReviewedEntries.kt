@@ -7,6 +7,10 @@ internal object ReviewedEntries {
     private fun entry(word: String, korean: String, english: String, examples: String) =
         WordEntry(word = word, ipa = "", korean = if (korean.startsWith("[")) korean else (if (word == "stuck") "[형용사]\n" else "[구동사]\n") + korean, english = english, examples = examples)
     private val entries = listOf(
+        entry("preliminary",
+            "1. [형용사] 본격적인 일에 앞서 하는, 예비적인; 준비 단계의\n2. [형용사] 아직 확정되지 않은, 잠정적인\n3. [명사] 사전 준비나 절차; (경기 등의) 예선",
+            "1. Done before the main activity as preparation.\n2. Provisional and subject to later confirmation.\n3. An initial procedure or a contest held before the final stage.",
+            "These are only the preliminary results.\t이 결과는 아직 잠정적인 것이다.\nWe held a preliminary meeting to discuss the schedule.\t우리는 일정을 논의하기 위해 사전 회의를 열었다.\nShe qualified for the final after winning her preliminary race.\t그녀는 예선 경기에서 우승해 결승에 진출했다."),
         entry("struck",
             "[동사] strike의 과거형·과거분사\n1. 치다, 때리다\n2. (생각·인상이) 문득 떠오르다, 강하게 다가오다\n3. (번개·재해 등이) 덮치다",
             "1. Simple past and past participle of strike.",

@@ -33,14 +33,14 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 data class WordEntry(val id: Long = 0, val word: String, val ipa: String, val korean: String, val english: String, val examples: String, val source: String = "")
-private data class LocalMeaning(val korean: String, val english: String, val ipa: String)
+private data class LocalMeaning(val korean: String, val english: String, val ipa: String, val source: String)
 
 private class LocalGlossary(private val activity: Activity) {
     private var database: SQLiteDatabase? = null
     @Synchronized private fun open(): SQLiteDatabase? {
         database?.let { return it }
         return try {
-            val file = activity.getDatabasePath("meaning_dictionary_nikl_v2.sqlite")
+            val file = activity.getDatabasePath("meaning_dictionary_combined_v3.sqlite")
             if (!file.exists()) {
                 file.parentFile?.mkdirs()
                 activity.assets.open("word_dictionary.sqlite").use { input -> file.outputStream().use { input.copyTo(it) } }
@@ -51,8 +51,8 @@ private class LocalGlossary(private val activity: Activity) {
     fun lookup(word: String): LocalMeaning? {
         val db = open() ?: return null
         return try {
-            db.rawQuery("SELECT meaning_ko, meaning_en, ipa FROM words WHERE word = ? COLLATE NOCASE LIMIT 1", arrayOf(word.trim())).use { c ->
-                if (c.moveToFirst()) LocalMeaning(c.getString(0).orEmpty(), c.getString(1).orEmpty(), c.getString(2).orEmpty()) else null
+            db.rawQuery("SELECT meaning_ko, meaning_en, ipa, source FROM words WHERE word = ? COLLATE NOCASE LIMIT 1", arrayOf(word.trim())).use { c ->
+                if (c.moveToFirst()) LocalMeaning(c.getString(0).orEmpty(), c.getString(1).orEmpty(), c.getString(2).orEmpty(), c.getString(3).orEmpty()) else null
             }
         } catch (_: Exception) { null }
     }
@@ -220,7 +220,7 @@ class MainActivity : Activity() {
             if (local != null && local.english.isNotBlank() && humanExamples.isNotEmpty()) {
                 val complete = WordEntry(word = q, ipa = "", korean = local.korean,
                     english = local.english, examples = humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" },
-                    source = "한국어 풀이: 국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR).\n" +
+                    source = localMeaningCredit(local, q) + "\n" +
                         humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba")
                 synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = complete }
                 runOnUiThread {
@@ -239,7 +239,7 @@ class MainActivity : Activity() {
                     korean = naturalizeKorean(q, local.korean),
                     english = local.english.ifBlank { "영어 풀이를 불러오는 중…" },
                     examples = humanExamples.takeIf { it.isNotEmpty() }?.joinToString("\n") { "${it.english}\t${it.korean}" } ?: bilingualFallbackExample(q),
-                    source = "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)"
+                    source = localMeaningCredit(local, q) + (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } else "")
                 )
                 runOnUiThread {
                     if (requestId != lookupSequence.get()) return@runOnUiThread
@@ -253,10 +253,12 @@ class MainActivity : Activity() {
                 val online = fetchDictionary(q)
                 // Korean meanings must be dictionary records, never machine-translated definitions.
                 val inflection = InflectedForms.find(online.first)
+                val baseLocal = inflection?.let { glossary.lookup(it.base) }
                 val baseMeaning = inflection?.let { form ->
-                    ReviewedEntries.lookup(form.base)?.korean ?: glossary.lookup(form.base)?.korean
+                    ReviewedEntries.lookup(form.base)?.korean ?: baseLocal?.korean
                 }
-                val korean = inflection?.korean(baseMeaning ?: local?.korean)
+                val korean = inflection?.korean(baseMeaning ?: online.second.takeIf { it.isNotBlank() } ?: local?.korean)
+                    ?: online.second.takeIf { it.isNotBlank() }
                     ?: local?.korean?.takeIf { it.isNotBlank() }
                     ?: "등록된 영한 뜻풀이가 없습니다. 아래 네이버 사전에서 확인해 주세요."
                 val sentences = online.third.split("\n").map { it.trim() }
@@ -268,9 +270,11 @@ class MainActivity : Activity() {
                 }.joinToString("\n")
                 val entry = WordEntry(word = q, ipa = "", korean = korean,
                     english = if (inflection != null) online.first else local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
-                    source = (if (local != null || baseMeaning != null) "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)" else "FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)") +
+                    source = "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)\n" +
+                        (if (inflection != null) "변형 안내: 영영 사전의 원형 정보를 한국어로 표시\n" else "") +
+                        (if (online.second.isNotBlank() && inflection == null) "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)" else if (baseLocal != null && inflection != null) localMeaningCredit(baseLocal, inflection.base) else localMeaningCredit(local, q)) +
                         (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba" else "\n일반 예문 해석: Google ML Kit 자동 번역"))
-                if (!korean.contains("불러오지 못") && !bilingual.contains("불러오지 못")) {
+                if (!korean.contains("등록된 영한 뜻풀이가 없습니다") && !korean.contains("불러오지 못") && !bilingual.contains("불러오지 못")) {
                     synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
                 }
                 runOnUiThread {
@@ -298,6 +302,12 @@ class MainActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun localMeaningCredit(local: LocalMeaning?, word: String): String = when (local?.source) {
+        "KOWIKTIONARY" -> "한국어 위키낱말사전 / Kaikki.org 영한 표제어 (CC BY-SA 4.0)\nhttps://ko.wiktionary.org/wiki/" + Uri.encode(word)
+        "NIKL" -> "국립국어원 한국어기초사전 영어 대역의 역색인 (CC BY-SA 2.0 KR)"
+        else -> "Wiktionary 사전 원형·뜻풀이 / 자체 검토 자료"
     }
 
     private fun lookupErrorMessage(error: Exception): String {
@@ -371,7 +381,10 @@ class MainActivity : Activity() {
                 }
             }
             val senses = entry.optJSONArray("senses") ?: JSONArray()
-            for (j in 0 until senses.length()) senses.optJSONObject(j)?.let { allSenses += it }
+            for (j in 0 until senses.length()) senses.optJSONObject(j)?.let { sense ->
+                sense.put("_partOfSpeech", entry.optString("partOfSpeech"))
+                allSenses += sense
+            }
         }
         val useful = allSenses
         val definitions = useful.mapNotNull { it.optString("definition").trim().takeIf(String::isNotBlank) }.distinct().take(4)
@@ -382,7 +395,16 @@ class MainActivity : Activity() {
         }.filter { SentenceExamples.isSentence(it) }.distinct().take(3)
         val english = definitions.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
         val examples = if (samples.isEmpty()) fallbackExample(q) else samples.joinToString("\n")
-        return Triple(english, ipa, examples)
+        val korean = KoreanLexicalMeanings.format(useful.map { sense ->
+            val translations = sense.optJSONArray("translations") ?: JSONArray()
+            val words = (0 until translations.length()).mapNotNull { index ->
+                val translation = translations.optJSONObject(index) ?: return@mapNotNull null
+                val code = translation.optJSONObject("language")?.optString("code").orEmpty()
+                if (code == "ko" || code == "kor") translation.optString("word").takeIf { it.isNotBlank() } else null
+            }
+            KoreanDictionarySense(sense.optString("_partOfSpeech"), words)
+        })
+        return Triple(english, korean, examples)
     }
 
     private fun fetchLegacyDictionary(q: String): Triple<String, String, String> {
@@ -409,7 +431,7 @@ class MainActivity : Activity() {
         }
         val english = definitions.take(4).mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
         val examples = if (samples.isEmpty()) fallbackExample(q) else samples.take(3).joinToString("\n")
-        return Triple(english, ipa, examples)
+        return Triple(english, "", examples)
     }
 
     private fun fallbackExample(word: String): String = "I heard “$word” in a conversation today."

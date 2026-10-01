@@ -17,3 +17,11 @@ Corpus pairs have human translations. Their inclusion does not guarantee every s
 ReviewedEntries.kt: original sense paraphrases and bilingual example sentences, separately authored for this app. Does not reproduce Naver's dictionary contents.
 External English definitions: FreeDictionaryAPI / Wiktionary, CC BY-SA 4.0.
 Fallback example translations: Google ML Kit, marked as automatic translation.
+
+Direct English-Korean senses
+Source: Korean Wiktionary contributors, distributed through Kaikki.org / Wiktextract.
+https://ko.wiktionary.org/
+https://kaikki.org/kowiktionary/%EC%98%81%EC%96%B4/index.html
+License: CC BY-SA 4.0, https://creativecommons.org/licenses/by-sa/4.0/
+Direct English headwords are preferred over the NIKL reverse index. Glosses are preserved and limited to four senses. Online Korean lexical translations come from FreeDictionaryAPI / English Wiktionary senses; English definitions are never machine-translated into Korean meanings.
+Licenses remain attached to their respective source records; the combined file does not relicense NIKL-derived records. Complete adaptation scripts are included in tools/.

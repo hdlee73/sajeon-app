@@ -4,6 +4,7 @@ Dictionary adaptation: NIKL Korean Basic Dictionary, CC BY-SA 2.0 KR.
 Source mirror: binjang/NIKL-dictionary-parser, pinned January 2024 export.
 Never index English definition text as if it were an English headword.
 """
+from direct_korean_dictionary import add_direct_dictionary
 import concurrent.futures
 import json
 import re
@@ -117,4 +118,5 @@ if __name__ == '__main__':
         paths = list(executor.map(download, FILES))
     assets = ROOT / 'app/src/main/assets'
     build_dictionary(paths, assets / 'word_dictionary.sqlite')
+    add_direct_dictionary(ROOT, assets / 'word_dictionary.sqlite')
     build_examples(assets / 'bilingual_examples.sqlite')

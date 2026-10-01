@@ -27,7 +27,9 @@ jobs:
         with:
           gradle-version: "8.9"
       - name: Build dictionary and human bilingual example data
-        run: python tools/build_learning_data.py
+        run: |
+          python -m unittest discover -s tools -p 'test_*.py'
+          python tools/build_learning_data.py
       - name: Test vocabulary lookup and compile app
         run: gradle :app:testDebugUnitTest
       - name: Restore fixed APK signing key
