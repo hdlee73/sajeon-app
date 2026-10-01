@@ -11,8 +11,8 @@ android {
         applicationId = "com.hdlee73.sajeonapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.5.7"
+        versionCode = 17
+        versionName = "1.5.8"
     }
 
     compileOptions {
@@ -22,7 +22,6 @@ android {
 }
 
 dependencies {
-    implementation("com.google.mlkit:translate:17.0.3")
     testImplementation("junit:junit:4.13.2")
 }
 

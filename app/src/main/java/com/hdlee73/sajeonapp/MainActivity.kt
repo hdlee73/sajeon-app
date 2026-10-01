@@ -1,9 +1,5 @@
 package com.hdlee73.sajeonapp
 
-import com.google.mlkit.common.model.DownloadConditions
-import com.google.mlkit.nl.translate.TranslateLanguage
-import com.google.mlkit.nl.translate.Translation
-import com.google.mlkit.nl.translate.TranslatorOptions
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ContentValues
@@ -88,22 +84,6 @@ class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 
 }
 
 class MainActivity : Activity() {
-    private val translator by lazy {
-        Translation.getClient(TranslatorOptions.Builder()
-            .setSourceLanguage(TranslateLanguage.ENGLISH)
-            .setTargetLanguage(TranslateLanguage.KOREAN).build())
-    }
-    private val translationHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val translations by lazy {
-        ExampleTranslationQueue(
-            download = { done -> translator.downloadModelIfNeeded(DownloadConditions.Builder().build())
-                .addOnSuccessListener { done(true) }.addOnFailureListener { done(false) } },
-            translate = { text, done -> translator.translate(text)
-                .addOnSuccessListener { done(it) }.addOnFailureListener { done(null) } },
-            schedule = { delay, action -> translationHandler.postDelayed({ action() }, delay) },
-            now = { android.os.SystemClock.elapsedRealtime() }
-        )
-    }
     private val searchIo = Executors.newFixedThreadPool(2)
     private var searchTask: java.util.concurrent.Future<*>? = null
     private val requestContext = ThreadLocal<Int>()
@@ -225,7 +205,6 @@ class MainActivity : Activity() {
             current = cached
             status.text = "검색 결과 · 저장된 검색"
             showEntry(cached, true)
-            completeExamples(cached, requestId)
             return
         }
         searchTask = searchIo.submit {
@@ -283,17 +262,18 @@ class MainActivity : Activity() {
                 val sentences = online.third.split("\n").map { it.trim() }
                     .filter { it.isNotBlank() && !it.startsWith("이 단어의 예문은 사전에서 제공하지 않습니다") }
                     .distinct().ifEmpty { listOf(fallbackExample(q)) }.take(2)
+                // Automatic machine translation caused a long first-search delay. Show the
+                // source English sentence immediately; reviewed corpus pairs remain bilingual.
                 val bilingual = if (humanExamples.isNotEmpty()) humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" }
                     else sentences.joinToString("\n") { sentence ->
-                        val ko = if (sentence == fallbackExample(q)) "오늘 대화에서 “$q”라는 표현을 들었습니다." else "(해석 준비 중…)"
-                        "$sentence\t$ko"
+                        if (sentence == fallbackExample(q)) "$sentence\t오늘 대화에서 “$q”라는 표현을 들었습니다." else "$sentence\t"
                     }
                 val entry = WordEntry(word = q, ipa = "", korean = korean,
                     english = if (inflection != null) online.first else local?.english?.takeIf { it.isNotBlank() } ?: online.first, examples = bilingual,
                     source = "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)\n" +
                         (if (inflection != null) "변형 안내: 영영 사전의 원형 정보를 한국어로 표시\n" else "") +
                         (if (online.second.isNotBlank() && inflection == null) "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)" else if (baseLocal != null && inflection != null) localMeaningCredit(baseLocal, inflection.base) else localMeaningCredit(local, q)) +
-                        (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba" else "\n일반 예문 해석: Google ML Kit 자동 번역"))
+                        (if (humanExamples.isNotEmpty()) "\n" + humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba" else "\n일반 예문: 영어 사전 예문"))
                 if (!korean.contains("등록된 영한 뜻풀이가 없습니다")) synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
                 runOnUiThread {
                     if (requestId != lookupSequence.get() || isDestroyed) return@runOnUiThread
@@ -303,7 +283,6 @@ class MainActivity : Activity() {
                         resultBox.removeAllViews()
                         showEntry(entry, true)
                     }
-                    completeExamples(entry, requestId)
                 }
             } catch (e: Exception) {
                 if (requestId != lookupSequence.get() || Thread.currentThread().isInterrupted) return@submit
@@ -472,7 +451,7 @@ class MainActivity : Activity() {
     }
 
     private fun displayExamples(stored: String): String = examplePairs(stored)
-        .joinToString("\n") { (en, ko) -> "$en\n$ko" }
+        .joinToString("\n") { (en, ko) -> if (ko.isBlank()) en else "$en\n$ko" }
 
     private fun naturalizeKorean(word: String, dictionaryGloss: String): String {
         // Add natural, sense-aware Korean glosses for common inflected forms whose
@@ -480,39 +459,6 @@ class MainActivity : Activity() {
         return when (word.trim().lowercase(Locale.ROOT)) {
             "stuck" -> "끼어 움직이지 않는; (일이나 문제 해결이) 막힌, 진전이 없는"
             else -> dictionaryGloss.trim().ifBlank { "한글 뜻을 찾지 못했습니다." }
-        }
-    }
-
-    private fun completeExamples(entry: WordEntry, requestId: Int) {
-        val pairs = examplePairs(entry.examples)
-        val missing = pairs.indices.filter { pairs[it].second in setOf("", "(해석 준비 중…)", "(해석을 불러오지 못했습니다)", "(해석을 준비하지 못했습니다. 연결 후 다시 검색해 주세요.)") }
-        if (missing.isEmpty()) return
-        if (!showSaved) status.text = "검색 결과 · 예문 해석 준비 중"
-        val updatedPairs = pairs.toMutableList()
-        var remaining = missing.size
-        missing.forEach { index ->
-            translations.request(pairs[index].first) { korean ->
-                if (isDestroyed) return@request
-                updatedPairs[index] = pairs[index].first to (korean ?: "(해석을 준비하지 못했습니다. 연결 후 다시 검색해 주세요.)")
-                remaining--
-                if (remaining == 0) {
-                    val updated = entry.copy(examples = updatedPairs.joinToString("\n") { "${it.first}\t${it.second}" })
-                    if (!entry.korean.contains("등록된 영한 뜻풀이가 없습니다")) synchronized(resultCache) { resultCache[entry.word.lowercase(Locale.ROOT)] = updated }
-                    // If saved while translation was pending, fill that exact saved version too.
-                    io.execute {
-                        db.updateExamples(entry, updated)
-                        runOnUiThread { if (!isDestroyed && showSaved) renderSaved() }
-                    }
-                    if (requestId == lookupSequence.get() && current?.word == entry.word) {
-                        current = updated
-                        if (!showSaved) {
-                            status.text = if (updatedPairs.any { it.second.contains("준비하지 못") }) "검색 결과 · 예문 해석을 준비하지 못했습니다" else "검색 결과"
-                            resultBox.removeAllViews()
-                            showEntry(updated, true)
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -561,7 +507,13 @@ class MainActivity : Activity() {
         addDictionaryLink("영영", "https://dict.naver.com/enendict/#/search?query=")
         card.addView(dictionaryLinks)
         section(card, "English definition", e.english)
-        section(card, if (e.examples == bilingualFallbackExample(e.word)) "표현을 언급하는 예문" else "예문 · 한국어 해석", displayExamples(e.examples))
+        val pairs = examplePairs(e.examples)
+        val exampleTitle = when {
+            e.examples == bilingualFallbackExample(e.word) -> "표현을 언급하는 예문"
+            pairs.any { it.second.isNotBlank() } -> "예문 · 한국어 해석"
+            else -> "영어 예문"
+        }
+        section(card, exampleTitle, displayExamples(e.examples))
         val credit = label(e.source.ifBlank { "의미별 자체 정리 · 직접 작성한 한영 예문" }, 10, false, 0xff64748b.toInt()).apply {
             setPadding(0, 12.dp(), 0, 0)
         }
@@ -687,9 +639,6 @@ class MainActivity : Activity() {
         searchTask?.cancel(true)
         searchIo.shutdownNow()
         connections.values.forEach { connection -> io.execute { connection.disconnect() } }
-        translations.close()
-        translationHandler.removeCallbacksAndMessages(null)
-        translator.close()
         io.shutdown()
         super.onDestroy()
     }

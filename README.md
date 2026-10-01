@@ -62,3 +62,7 @@ Dictionary lookup publishes the entry before requesting automatic example transl
 A new search cancels the previous task, disconnects obsolete HTTP connections away from the UI thread, and rejects stale responses. Lookup uses two workers independently of exports. Reviewed entries (including catch up) display directly, and repeated dictionary results use an in-memory cache. Pending example translations fill the exact saved record if the user saves before they arrive; other versions of that record are not overwritten. Activity destruction drops translation listeners and timers.
 
 Regression tests cover a held model download while additional requests arrive, single-flight requests, model timeout and retry cooldown, late callbacks, translation cache, per-sentence timeout, and activity close. The Android build and tests run in GitHub Actions; device search latency and audio playback still require real-device verification.
+
+## v1.5.8: instant example display
+
+Automatic Korean translation via a downloaded on-device model was removed because its first-use download could delay searches significantly. Reviewed and corpus examples that already have a Korean translation remain bilingual. Other dictionary examples appear immediately as English-only sentences, with no waiting, model-download message, or translation retry. The fallback learning sentence remains bilingual.
