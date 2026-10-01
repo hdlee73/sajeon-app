@@ -1,10 +1,13 @@
 package com.hdlee73.sajeonapp
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipboardManager
+import android.content.Context
 import android.content.ContentValues
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.graphics.Typeface
@@ -20,6 +23,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.google.android.material.color.DynamicColors
 import com.google.android.material.color.MaterialColors
 import org.json.JSONArray
@@ -60,7 +66,7 @@ private class LocalGlossary(private val activity: Activity) {
     }
 }
 
-class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 3) {
+class EntryDb(context: Context) : SQLiteOpenHelper(context, "sajeon.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE entries(id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL UNIQUE COLLATE NOCASE, ipa TEXT, korean TEXT, english TEXT, examples TEXT, source TEXT DEFAULT '')")
     }
@@ -665,9 +671,13 @@ class MainActivity : Activity() {
                 else -> "영어단어장.xlsx"
             }
             val mime = if (exportFormat == 4) "text/csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if (android.os.Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 91)
+            }
             val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = mime
+                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                 putExtra(Intent.EXTRA_TITLE, name)
             }
             startActivityForResult(intent, 42)
@@ -679,17 +689,14 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 42 && resultCode == Activity.RESULT_OK) {
             val uri = data?.data ?: return
-            io.execute {
-                try {
-                    contentResolver.openOutputStream(uri)?.use { output ->
-                        val content = if (exportFormat == 4) makeAnkiCsv(db.all()).toByteArray(Charsets.UTF_8) else makeWorkbook(db.all())
-                        output.write(content)
-                    }
-                    runOnUiThread { toast(if (exportFormat == 4) "Anki용 CSV 파일을 저장했습니다" else "엑셀 파일을 저장했습니다") }
-                } catch (e: Exception) {
-                    runOnUiThread { toast("파일 저장 실패: ${e.message}") }
-                }
-            }
+            try {
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            } catch (_: SecurityException) { }
+            val request = OneTimeWorkRequestBuilder<ExportWorker>()
+                .setInputData(workDataOf(ExportWorker.KEY_URI to uri.toString(), ExportWorker.KEY_FORMAT to exportFormat))
+                .build()
+            WorkManager.getInstance(this).enqueue(request)
+            toast("파일 저장을 백그라운드에서 시작했습니다.")
         }
     }
 
@@ -708,37 +715,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun makeWorkbook(originalEntries: List<WordEntry>): ByteArray {
-        val entries = originalEntries.map { it.studyVersion() }
-        val rows = when (exportFormat) {
-            2 -> mutableListOf(listOf("예문 한글 해석", "영어 예문")).apply {
-                entries.forEach { e -> examplePairs(e.examples).forEach { add(listOf(it.second, it.first)) } }
-            }
-            3 -> mutableListOf(listOf("영어 예문")).apply {
-                entries.forEach { e -> examplePairs(e.examples).forEach { add(listOf(it.first)) } }
-            }
-            else -> mutableListOf(listOf("영단어", "한글 의미\nEnglish definition", "영어 예문 (한글 해석 병기)")).apply {
-                entries.forEach { e -> add(listOf(e.word, "${e.korean}\n${e.english}", displayExamples(e.examples))) }
-            }
-        }
-        val sheet = buildString {
-            append("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><cols><col min=\"1\" max=\"1\" width=\"28\" customWidth=\"1\"/><col min=\"2\" max=\"2\" width=\"52\" customWidth=\"1\"/><col min=\"3\" max=\"3\" width=\"60\" customWidth=\"1\"/></cols><sheetData>")
-            rows.forEachIndexed { ri, row -> append("<row r=\"${ri + 1}\" ht=\"42\" customHeight=\"1\">"); row.forEachIndexed { ci, value -> val ref = "${'A' + ci}${ri + 1}"; append("<c r=\"$ref\" s=\"1\" t=\"inlineStr\"><is><t xml:space=\"preserve\">${xml(value)}</t></is></c>") }; append("</row>") }
-            append("</sheetData></worksheet>")
-        }
-        val attribution = entries.map { it.source.ifBlank { "의미별 자체 정리 · 직접 작성한 한영 예문" } }.distinct()
-        val sourceSheet = """<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>""" + attribution.mapIndexed { i, credit -> """<row r="${i + 1}"><c r="A${i + 1}" t="inlineStr"><is><t>${xml(credit)}</t></is></c></row>""" }.joinToString("") + "</sheetData></worksheet>"
-        val out = ByteArrayOutputStream(); ZipOutputStream(out).use { z ->
-            fun put(path: String, value: String) { z.putNextEntry(ZipEntry(path)); z.write(value.toByteArray(Charsets.UTF_8)); z.closeEntry() }
-            put("[Content_Types].xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/xl/worksheets/sheet1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/><Override PartName=\"/xl/styles.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml\"/><Override PartName=\"/xl/worksheets/sheet2.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/></Types>")
-            put("_rels/.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/></Relationships>")
-            put("xl/workbook.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets><sheet name=\"단어장\" sheetId=\"1\" r:id=\"rId1\"/><sheet name=\"출처\" sheetId=\"2\" r:id=\"rId3\"/></sheets></workbook>")
-            put("xl/_rels/workbook.xml.rels", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet1.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet2.xml\"/></Relationships>")
-            put("xl/styles.xml", "<?xml version=\"1.0\" encoding=\"UTF-8\"?><styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Arial\"/></font></fonts><fills count=\"1\"><fill><patternFill patternType=\"none\"/></fill></fills><borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs><cellXfs count=\"2\"><xf xfId=\"0\"/><xf xfId=\"0\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf></cellXfs></styleSheet>")
-            put("xl/worksheets/sheet1.xml", sheet)
-            put("xl/worksheets/sheet2.xml", sourceSheet)
-        }; return out.toByteArray()
-    }
+    private fun makeWorkbook(originalEntries: List<WordEntry>): ByteArray = ExportWorkbook.make(originalEntries, exportFormat)
 
     private fun xml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;").replace("\n", "&#10;")
     private fun section(parent: LinearLayout, title: String, value: String) { parent.addView(label(title, 14, true, blue).apply { setPadding(0, 10.dp(), 0, 3.dp()) }); parent.addView(label(value, 16, false, dark)) }

@@ -11,8 +11,8 @@ android {
         applicationId = "com.hdlee73.sajeonapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 20
-        versionName = "1.5.11"
+        versionCode = 21
+        versionName = "1.5.12"
     }
 
     compileOptions {
@@ -23,6 +23,7 @@ android {
 
 dependencies {
     implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
     testImplementation("junit:junit:4.13.2")
 }
 
