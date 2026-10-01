@@ -11,8 +11,8 @@ android {
         applicationId = "com.hdlee73.sajeonapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 18
-        versionName = "1.5.9"
+        versionCode = 19
+        versionName = "1.5.10"
     }
 
     compileOptions {

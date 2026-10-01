@@ -1,5 +1,5 @@
 
-## v1.5.9: reviewed phrases and Anki workflow
+## v1.5.10: reviewed phrases and Anki workflow
 
 High-frequency phrasal verbs and idioms such as **keep away**, **keep up**, **come across**, **get through**, **make up**, and **put up with** are now resolved as reviewed learning entries before an online lookup. Each supplies a Korean part of speech, one to four dictionary-style senses, and natural bilingual examples.
 
