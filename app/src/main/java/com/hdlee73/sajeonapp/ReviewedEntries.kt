@@ -39,6 +39,6 @@ internal object ReviewedEntries {
         entry("break down", "1. (기계 등이) 고장 나다\n2. (협상 등이) 결렬되다\n3. 감정을 억누르지 못하고 무너지다\n4. (내용을) 나누어 분석하다", "1. To stop functioning.\n2. To fail.\n3. To lose emotional control.\n4. To divide into parts for analysis.", "Our car broke down on the way home.\t집으로 돌아오는 길에 차가 고장 났다."),
         entry("stuck", "1. 끼어서 움직이지 못하는\n2. (문제·일이) 막혀 진전이 없는\n3. (어떤 상황에서) 벗어나지 못하는", "1. Unable to move.\n2. Unable to make progress.\n3. Unable to leave a situation.", "I'm stuck on this math problem.\t이 수학 문제에서 막혀 더 이상 풀지 못하고 있어.")
     ).associateBy { it.word }
-    fun lookup(query: String): WordEntry? = entries[query.trim().lowercase(Locale.ROOT).replace(Regex("\\s+"), " ")]
+    fun lookup(query: String): WordEntry? = entries[query.trim().lowercase(Locale.ROOT).replace(Regex("\\s+"), " ")] ?: CorePhrases.lookup(query)
 }
 

@@ -2,6 +2,7 @@ package com.hdlee73.sajeonapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipboardManager
 import android.content.ContentValues
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
@@ -9,11 +10,18 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
+import com.google.android.material.color.DynamicColors
+import com.google.android.material.color.MaterialColors
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -85,6 +93,15 @@ class EntryDb(context: Activity) : SQLiteOpenHelper(context, "sajeon.db", null, 
 
 class MainActivity : Activity() {
     private val searchIo = Executors.newFixedThreadPool(2)
+    private val debounceHandler = Handler(Looper.getMainLooper())
+    private var suppressDebouncedSearch = false
+    private var lastClipboardText = ""
+    private val debouncedSearch = Runnable {
+        if (!suppressDebouncedSearch) {
+            val query = searchInput.text.toString().trim()
+            if (query.length >= 2) lookup(query)
+        }
+    }
     private var searchTask: java.util.concurrent.Future<*>? = null
     private val requestContext = ThreadLocal<Int>()
     private val connections = java.util.concurrent.ConcurrentHashMap<Int, HttpURLConnection>()
@@ -105,11 +122,14 @@ class MainActivity : Activity() {
     private var exportFormat = 1
     private var returnToPdf = false
     private lateinit var returnButton: Button
-    private val blue = 0xff486a90.toInt()
-    private val dark = 0xff182230.toInt()
+    private var blue = 0xff486a90.toInt()
+    private var dark = 0xff182230.toInt()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DynamicColors.applyToActivityIfAvailable(this)
+        blue = MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary, blue)
+        dark = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface, dark)
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         db = EntryDb(this)
         glossary = LocalGlossary(this)
@@ -132,12 +152,34 @@ class MainActivity : Activity() {
         val query = intent?.getStringExtra("query")?.trim().orEmpty()
         if (query.isNotEmpty()) {
             showSaved = false
-            searchInput.setText(query)
-            searchInput.setSelection(query.length)
+            setSearchTextWithoutDebounce(query)
             lookup(query)
         } else {
             renderSaved()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        detectClipboardSearch()
+    }
+
+    private fun setSearchTextWithoutDebounce(query: String) {
+        suppressDebouncedSearch = true
+        searchInput.setText(query)
+        searchInput.setSelection(query.length)
+        suppressDebouncedSearch = false
+    }
+
+    private fun detectClipboardSearch() {
+        val clipboard = getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+        val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()?.trim().orEmpty()
+        // Only a copied word, phrasal verb, or short idiom is used; sentences are ignored.
+        if (text == lastClipboardText || !text.matches(Regex("[A-Za-z][A-Za-z '\\-]{0,79}"))) return
+        if (text.split(Regex("\\s+")).size > 6) return
+        lastClipboardText = text
+        setSearchTextWithoutDebounce(text)
+        lookup(text)
     }
 
     private fun buildUi() {
@@ -161,6 +203,17 @@ class MainActivity : Activity() {
         val searchCard = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(8.dp(), 8.dp(), 8.dp(), 8.dp()); background = rounded(0xffffffff.toInt(), 17) }
         searchInput = EditText(this).apply { hint = "단어, 숙어 또는 구동사"; setSingleLine(true); textSize = 16f; setPadding(12.dp(), 4.dp(), 12.dp(), 4.dp()); background = android.graphics.drawable.ColorDrawable(0x00000000); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH }
         searchInput.setOnEditorActionListener { _, actionId, _ -> if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) { searchNow(); true } else false }
+        searchInput.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                debounceHandler.removeCallbacks(debouncedSearch)
+                if (!suppressDebouncedSearch) debounceHandler.postDelayed(debouncedSearch, 300)
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
+        searchInput.setOnFocusChangeListener { _, focused ->
+            searchCard.animate().scaleX(if (focused) 1.015f else 1f).scaleY(if (focused) 1.015f else 1f).setDuration(160).start()
+        }
         searchCard.addView(searchInput, LinearLayout.LayoutParams(0, 50.dp(), 1f))
         searchCard.addView(button("검색", 0xff567590.toInt(), 0xffffffff.toInt()).apply { setOnClickListener { searchNow() } }, LinearLayout.LayoutParams(84.dp(), 50.dp()))
         root.addView(searchCard)
@@ -180,6 +233,7 @@ class MainActivity : Activity() {
     }
 
     private fun searchNow() {
+        debounceHandler.removeCallbacks(debouncedSearch)
         val q = searchInput.text.toString().trim()
         (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(searchInput.windowToken, 0)
         searchInput.clearFocus()
@@ -189,6 +243,7 @@ class MainActivity : Activity() {
     private fun showPage() { updateTabs(); if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
 
     private fun lookup(q: String) {
+        debounceHandler.removeCallbacks(debouncedSearch)
         val requestId = lookupSequence.incrementAndGet()
         searchTask?.cancel(true)
         // Disconnect old requests away from the UI thread, including blocked reads.
@@ -489,8 +544,13 @@ class MainActivity : Activity() {
                     else toast("저장하지 못했습니다. 다시 시도해 주세요.")
                 }
             }
-            wordRow.addView(saveButton, LinearLayout.LayoutParams(78.dp(), 40.dp()).apply { leftMargin = 6.dp() })
+            wordRow.addView(saveButton, LinearLayout.LayoutParams(72.dp(), 40.dp()).apply { leftMargin = 6.dp() })
         }
+        wordRow.addView(button("Anki", 0xfffff2d8.toInt(), 0xff805c20.toInt()).apply {
+            textSize = 12f
+            contentDescription = "AnkiDroid 카드 보내기"
+            setOnClickListener { sendToAnki(e) }
+        }, LinearLayout.LayoutParams(60.dp(), 40.dp()).apply { leftMargin = 6.dp() })
         card.addView(wordRow)
         section(card, "한글 의미", e.korean)
         val dictionaryLinks = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -522,6 +582,26 @@ class MainActivity : Activity() {
     }
 
     private fun speak(text: String) { wordSpeaker.speak(text) }
+
+    private fun sendToAnki(entry: WordEntry) {
+        val e = entry.studyVersion()
+        val back = buildString {
+            append(e.korean)
+            if (e.english.isNotBlank()) append("\n\n").append(e.english)
+            if (e.examples.isNotBlank()) append("\n\n").append(displayExamples(e.examples))
+        }
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            setPackage("com.ichi2.anki")
+            putExtra(Intent.EXTRA_SUBJECT, e.word)
+            putExtra(Intent.EXTRA_TEXT, back)
+        }
+        if (intent.resolveActivity(packageManager) == null) {
+            toast("AnkiDroid를 설치한 뒤 다시 시도해 주세요.")
+        } else {
+            startActivity(intent)
+        }
+    }
 
     private fun updateTabs() {
         if (!::searchTab.isInitialized || !::savedTab.isInitialized) return
@@ -575,11 +655,21 @@ class MainActivity : Activity() {
     private fun createXlsx() {
         val entries = db.all()
         if (entries.isEmpty()) { toast("내보낼 저장 단어가 없습니다"); return }
-        val choices = arrayOf("단어·뜻·영어 예문(한글 해석 병기)", "한글 예문 해석 + 영어 예문", "영어 예문만")
-        AlertDialog.Builder(this).setTitle("엑셀 저장 형식").setItems(choices) { _, which ->
+        val choices = arrayOf("단어·뜻·영어 예문(한글 해석 병기)", "한글 예문 해석 + 영어 예문", "영어 예문만", "Anki용 CSV (앞면: 단어 / 뒷면: 뜻·예문)")
+        AlertDialog.Builder(this).setTitle("내보내기 형식").setItems(choices) { _, which ->
             exportFormat = which + 1
-            val name = when (which) { 1 -> "영어예문_한영.xlsx"; 2 -> "영어예문.xlsx"; else -> "영어단어장.xlsx" }
-            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"; putExtra(Intent.EXTRA_TITLE, name) }
+            val name = when (which) {
+                1 -> "영어예문_한영.xlsx"
+                2 -> "영어예문.xlsx"
+                3 -> "Anki_영어단어장.csv"
+                else -> "영어단어장.xlsx"
+            }
+            val mime = if (exportFormat == 4) "text/csv" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = mime
+                putExtra(Intent.EXTRA_TITLE, name)
+            }
             startActivityForResult(intent, 42)
         }.setNegativeButton("취소", null).show()
     }
@@ -589,7 +679,32 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 42 && resultCode == Activity.RESULT_OK) {
             val uri = data?.data ?: return
-            io.execute { try { contentResolver.openOutputStream(uri)?.use { it.write(makeWorkbook(db.all())) }; runOnUiThread { toast("엑셀 파일을 저장했습니다") } } catch (e: Exception) { runOnUiThread { toast("파일 저장 실패: ${e.message}") } } }
+            io.execute {
+                try {
+                    contentResolver.openOutputStream(uri)?.use { output ->
+                        val content = if (exportFormat == 4) makeAnkiCsv(db.all()).toByteArray(Charsets.UTF_8) else makeWorkbook(db.all())
+                        output.write(content)
+                    }
+                    runOnUiThread { toast(if (exportFormat == 4) "Anki용 CSV 파일을 저장했습니다" else "엑셀 파일을 저장했습니다") }
+                } catch (e: Exception) {
+                    runOnUiThread { toast("파일 저장 실패: ${e.message}") }
+                }
+            }
+        }
+    }
+
+    private fun makeAnkiCsv(originalEntries: List<WordEntry>): String {
+        fun field(value: String) = "\"" + value.replace("\"", "\"\"").replace("\n", "<br>") + "\""
+        return buildString {
+            append("\uFEFF앞면,뒷면\n")
+            originalEntries.map { it.studyVersion() }.forEach { e ->
+                val back = buildString {
+                    append(e.korean)
+                    if (e.english.isNotBlank()) append("\n\n").append(e.english)
+                    if (e.examples.isNotBlank()) append("\n\n").append(displayExamples(e.examples))
+                }
+                append(field(e.word)).append(',').append(field(back)).append('\n')
+            }
         }
     }
 
@@ -634,6 +749,7 @@ class MainActivity : Activity() {
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
+        debounceHandler.removeCallbacksAndMessages(null)
         lookupSequence.incrementAndGet()
         if (::wordSpeaker.isInitialized) wordSpeaker.close()
         searchTask?.cancel(true)
