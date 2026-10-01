@@ -8,3 +8,7 @@ The saved-word export menu now includes an Anki CSV with the word on the front a
 ## v1.5.12: durable background export
 
 Exports now run as a WorkManager job after Android has granted the chosen document URI. The worker reads saved entries independently, writes XLSX or Anki CSV off the UI thread, and shows a completion notification when Android permits notifications. Export data is no longer tied to the visible activity.
+
+## v1.5.13: swipe actions
+
+Swipe a search-result card horizontally to save it. Swipe a saved-word row horizontally to delete it; a confirmation toast is shown and the list refreshes.

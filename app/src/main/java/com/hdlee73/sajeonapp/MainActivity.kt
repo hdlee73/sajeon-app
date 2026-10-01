@@ -35,6 +35,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
+import kotlin.math.abs
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
@@ -584,6 +585,12 @@ class MainActivity : Activity() {
             setPadding(0, 12.dp(), 0, 0)
         }
         card.addView(credit)
+        if (canSave) {
+            installHorizontalSwipe(card) {
+                if (db.save(e)) toast("단어장에 저장했습니다")
+                else toast("저장하지 못했습니다. 다시 시도해 주세요.")
+            }
+        }
         resultBox.addView(card, LinearLayout.LayoutParams(-1, -2).apply { topMargin = 8.dp(); bottomMargin = 12.dp() })
     }
 
@@ -654,6 +661,11 @@ class MainActivity : Activity() {
                     }
                 }
             }, LinearLayout.LayoutParams(40.dp(), 40.dp()).apply { leftMargin = 4.dp() })
+            installHorizontalSwipe(row) {
+                db.delete(e.id)
+                toast("삭제했습니다")
+                renderSaved()
+            }
             resultBox.addView(row, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 8.dp() })
         }
     }
@@ -718,6 +730,29 @@ class MainActivity : Activity() {
     private fun makeWorkbook(originalEntries: List<WordEntry>): ByteArray = ExportWorkbook.make(originalEntries, exportFormat)
 
     private fun xml(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;").replace("\n", "&#10;")
+    private fun installHorizontalSwipe(view: View, action: () -> Unit) {
+        var downX = 0f
+        var downY = 0f
+        view.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX
+                    downY = event.rawY
+                    false
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (abs(dx) > 96.dp() && abs(dx) > abs(dy) * 1.5f) {
+                        action()
+                        true
+                    } else false
+                }
+                else -> false
+            }
+        }
+    }
+
     private fun section(parent: LinearLayout, title: String, value: String) { parent.addView(label(title, 14, true, blue).apply { setPadding(0, 10.dp(), 0, 3.dp()) }); parent.addView(label(value, 16, false, dark)) }
     private fun label(text: String, size: Int, bold: Boolean, color: Int) = TextView(this).apply { this.text = text; textSize = size.toFloat(); setTextColor(color); if (bold) setTypeface(null, Typeface.BOLD); setLineSpacing(2.dp().toFloat(), 1f) }
     private fun button(text: String, fill: Int = 0xffedf1f6.toInt(), ink: Int = blue) = Button(this).apply { this.text = text; textSize = 14f; isAllCaps = false; setTextColor(ink); background = rounded(fill, 12); setPadding(10.dp(), 0, 10.dp(), 0); minHeight = 0; minimumHeight = 0; minWidth = 0; minimumWidth = 0; stateListAnimator = null }
