@@ -45,4 +45,18 @@ class ExampleSenseTest {
         assertTrue(ExampleSense.pick(emptyList(), meanings).isEmpty())
         assertEquals(listOf(tree), ExampleSense.pick(listOf(tree), meanings))
     }
+
+    @Test fun compoundInTheExampleSuppliesTheSenseItUses() {
+        val dict = mapOf("palm tree" to "1. [명사] (식물) 야자나무.")
+        val got = ExampleSense.compoundSenses(listOf(tree), "palm", "1. [명사] 손바닥, 손뼉") { dict[it] }
+        assertEquals(listOf("[명사] 야자나무"), got)
+    }
+
+    @Test fun compoundIsIgnoredWhenKnownOrNotInTheTranslation() {
+        val dict = mapOf("palm tree" to "1. [명사] 야자나무.", "palm reading" to "1. [명사] 손금")
+        assertTrue(ExampleSense.compoundSenses(listOf(tree), "palm", "1. [명사] 야자나무", { dict[it] }).isEmpty())
+        val other = s("She likes palm reading.", "그녀는 점을 좋아한다.")
+        assertTrue(ExampleSense.compoundSenses(listOf(other), "palm", "", { dict[it] }).isEmpty())
+        assertTrue(ExampleSense.compoundSenses(listOf(tree), "palm tree", "", { dict[it] }).isEmpty())
+    }
 }

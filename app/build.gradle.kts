@@ -11,8 +11,8 @@ android {
         applicationId = "com.hdlee73.sajeonapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "1.6.3"
+        versionCode = 28
+        versionName = "1.6.4"
     }
 
     // Every release must be signed with the same permanent key, otherwise Android refuses to install an

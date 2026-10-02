@@ -404,7 +404,7 @@ class MainActivity : Activity() {
             val formBaseLocal = formOf?.let { glossary.lookup(it.base) }
             var usedAutoMeaning = false
             var supplementCredit = ""
-            val korean: String? = when {
+            val koreanBase: String? = when {
                 offlineKorean != null -> {
                     // "wanted" is a headword (adjective) and also the past tense of "want".
                     val note = if (local != null && pointer == null && alsoForm == null && formOf != null && formBaseKorean != null)
@@ -438,6 +438,17 @@ class MainActivity : Activity() {
                 else -> autoMeaning(q, requestId)?.also { usedAutoMeaning = true }?.text
             }
             if (stale()) return@submit
+            // The examples may use a sense the lists lack (palm tree → 야자나무): add it from the
+            // compound's own dictionary entry so the meanings and the example agree.
+            var korean = koreanBase
+            if (koreanBase != null && offlineKorean != null && local != null && pointer == null) {
+                val shown = ExampleSense.pick(exampleCandidates, koreanBase)
+                val compound = ExampleSense.compoundSenses(shown, q, koreanBase) { glossary.lookup(it)?.korean }
+                if (compound.isNotEmpty()) {
+                    korean = MeaningMerge.combine(koreanBase, compound, online.parts)
+                    supplementCredit = listOf(supplementCredit, "예문 속 복합어 뜻: 한국어 위키낱말사전 (CC BY-SA 4.0)").filter { it.isNotBlank() }.joinToString("\n")
+                }
+            }
             val spelling = if (korean == null) (glossary.spellingCandidates(q) + phraseCandidates).distinct().take(5) else emptyList()
             val english = local?.english?.ifBlank { null } ?: online.english
 

@@ -45,4 +45,35 @@ internal object ExampleSense {
         }
         return chosen
     }
+
+    /**
+     * Senses used by the shown examples that the meaning list lacks, found through a compound the
+     * example contains: "Tom is planting a palm tree" → the dictionary's "palm tree" (야자나무),
+     * kept only when that Korean word appears in the example's Korean translation.
+     */
+    fun compoundSenses(examples: List<BilingualSentence>, query: String, existing: String,
+                       lookup: (String) -> String?): List<String> {
+        val q = query.trim().lowercase()
+        if (q.isEmpty() || q.contains(' ')) return emptyList()
+        val known = StringBuilder(existing)
+        val out = mutableListOf<String>()
+        for (example in examples) {
+            val tokens = Regex("[A-Za-z]+(?:'[A-Za-z]+)?").findAll(example.english).map { it.value.lowercase() }.toList()
+            val at = tokens.indexOf(q)
+            if (at < 0) continue
+            val text = example.korean.replace(Regex("\\s+"), "")
+            val compounds = listOfNotNull(tokens.getOrNull(at + 1)?.let { "$q $it" }, tokens.getOrNull(at - 1)?.let { "$it $q" })
+            for (compound in compounds) {
+                val first = (lookup(compound) ?: continue).lines().firstNotNullOfOrNull { numbered.find(it)?.groupValues?.get(1) } ?: continue
+                val part = label.find(first)?.value?.trim()
+                val words = first.replace(label, "").replace(Regex("\\([^)]*\\)"), "").split(',', ';')
+                    .map { it.trim().trimEnd('.') }
+                    .filter { w -> w.any { it in '가'..'힣' } && stem(w).length >= 2 && text.contains(stem(w)) && !known.contains(w) }
+                if (words.isEmpty()) continue
+                out += (if (part != null) "$part " else "") + words.joinToString(", ")
+                known.append(' ').append(words.joinToString(" "))
+            }
+        }
+        return out
+    }
 }

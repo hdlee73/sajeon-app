@@ -55,3 +55,6 @@ The app still cannot tell which sense an example sentence uses; it lists the sen
 - **Update install fix.** Earlier releases were each signed with a freshly generated key, so Android refused to install one over another ("App not installed"). The build now passes the permanent keystore to Gradle explicitly and CI fails the release if the APK's signing certificate differs from that keystore. From this version on, updates install over the previous version. The one-time exception: moving from a pre-1.6.3 install to 1.6.3 still needs the old app removed first (export saved words to Excel beforehand).
 - **Main sense in the meaning list.** For headwords the automatic dictionary is asked in parallel and its top words for the entry's main part of speech are added when missing (palm → 야자나무).
 - **Examples fit the meanings.** Up to 30 corpus sentences are considered; the ones whose Korean translation uses a word of the first-listed sense come first, then another listed sense.
+
+## v1.6.4: meanings follow the example's sense
+- When a shown example uses a compound the dictionary knows (Tom is planting a palm **tree** → `palm tree` = 야자나무) and the Korean word appears in the example's translation, that sense is added to the meaning list, so the list and the example always agree.
