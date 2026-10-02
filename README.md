@@ -50,3 +50,8 @@ Note: the fallback and example translations send the searched word and example s
 
 The app still cannot tell which sense an example sentence uses; it lists the senses and leaves that choice to the reader.
 
+
+## v1.6.3: fixed update signing, meanings and examples that match
+- **Update install fix.** Earlier releases were each signed with a freshly generated key, so Android refused to install one over another ("App not installed"). The build now passes the permanent keystore to Gradle explicitly and CI fails the release if the APK's signing certificate differs from that keystore. From this version on, updates install over the previous version. The one-time exception: moving from a pre-1.6.3 install to 1.6.3 still needs the old app removed first (export saved words to Excel beforehand).
+- **Main sense in the meaning list.** For headwords the automatic dictionary is asked in parallel and its top words for the entry's main part of speech are added when missing (palm → 야자나무).
+- **Examples fit the meanings.** Up to 30 corpus sentences are considered; the ones whose Korean translation uses a word of the first-listed sense come first, then another listed sense.

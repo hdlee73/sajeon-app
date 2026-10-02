@@ -50,4 +50,11 @@ class MeaningMergeTest {
         val extras = (6..9).map { "[명사] 뜻$it" }
         assertEquals(StudyMeanings.MAX_SENSES, MeaningMerge.combine(many, extras, emptyList()).lines().size)
     }
+
+    @Test fun extrasCanBeLimitedToTheTopWordsAndPartsOfSpeech() {
+        val source = "1. [명사] 야자, 손바닥, 손, 종려나무, 야자수\n2. [동사] 감추다"
+        val got = MeaningMerge.extras(source, setOf("명사"), "1. [명사] 손바닥, 손뼉", 2, maxWords = 2, topWords = 3)
+        assertEquals(listOf("[명사] 야자"), got)
+        assertTrue(MeaningMerge.extras(source, setOf("형용사"), "", 2).isEmpty())
+    }
 }

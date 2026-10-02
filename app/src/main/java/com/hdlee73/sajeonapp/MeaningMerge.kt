@@ -54,7 +54,8 @@ internal object MeaningMerge {
      * Senses from [source] whose Korean words are not already in [existing], reduced to the new
      * words only ("[명사] 야자나무"). [parts] restricts the parts of speech taken, null takes any.
      */
-    fun extras(source: String, parts: Set<String>?, existing: String, limit: Int): List<String> {
+    fun extras(source: String, parts: Set<String>?, existing: String, limit: Int,
+               maxWords: Int = Int.MAX_VALUE, topWords: Int = Int.MAX_VALUE): List<String> {
         val known = StringBuilder(existing)
         val out = mutableListOf<String>()
         for (sense in parse(source).senses) {
@@ -63,8 +64,8 @@ internal object MeaningMerge {
             if (parts != null && pos !in parts) continue
             val match = partLabel.find(sense.trim())
             val body = match?.groupValues?.get(2) ?: sense
-            val words = body.split(',', ';').map { it.trim().trimEnd('.') }
-                .filter { word -> word.any { it in '가'..'힣' } && !known.contains(word) }.distinct()
+            val words = body.split(',', ';').map { it.trim().trimEnd('.') }.take(topWords)
+                .filter { word -> word.any { it in '가'..'힣' } && !known.contains(word) }.distinct().take(maxWords)
             if (words.isEmpty()) continue
             out += (if (match != null) "[${match.groupValues[1]}] " else "") + words.joinToString(", ")
             known.append(' ').append(words.joinToString(" "))

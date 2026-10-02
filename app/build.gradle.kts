@@ -11,8 +11,26 @@ android {
         applicationId = "com.hdlee73.sajeonapp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "1.6.2"
+        versionCode = 27
+        versionName = "1.6.3"
+    }
+
+    // Every release must be signed with the same permanent key, otherwise Android refuses to install an
+    // update over the existing app ("App not installed"). CI passes the restored keystore explicitly instead
+    // of relying on the default ~/.android/debug.keystore location.
+    val releaseKeystore = System.getenv("SAJEON_KEYSTORE")
+    if (!releaseKeystore.isNullOrBlank()) {
+        signingConfigs {
+            create("fixed") {
+                storeFile = file(releaseKeystore)
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
+        buildTypes {
+            getByName("debug") { signingConfig = signingConfigs.getByName("fixed") }
+        }
     }
 
     compileOptions {

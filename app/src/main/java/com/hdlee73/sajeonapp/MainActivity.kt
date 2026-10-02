@@ -339,7 +339,9 @@ class MainActivity : Activity() {
                 baseLocal != null -> localMeaningCredit(baseLocal, baseForm!!.base)
                 else -> ""
             }
-            val humanExamples = exampleCorpus.lookup(q)
+            val exampleCandidates = exampleCorpus.lookup(q)
+            // Examples are chosen to fit the Korean meanings shown, most common sense first.
+            val humanExamples = ExampleSense.pick(exampleCandidates, offlineKorean.orEmpty())
             val humanExampleText = humanExamples.joinToString("\n") { "${it.english}\t${it.korean}" }
             val humanCredit = if (humanExamples.isEmpty()) "" else humanExamples.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba"
             val phraseCandidates = if (offlineKorean == null) glossary.suggest(q).filter { !it.equals(q, true) } else emptyList()
@@ -363,6 +365,9 @@ class MainActivity : Activity() {
             }
 
             // 2) Online: English definitions, examples and (if still needed) a Korean meaning.
+            // The automatic dictionary is asked in parallel for the main sense of headwords (palm → 야자나무).
+            val autoFuture = if (local != null && pointer == null)
+                translateIo.submit<MachineMeaning?> { autoMeaning(q, requestId) } else null
             val online = try { fetchDictionary(q) } catch (e: Exception) {
                 if (stale()) return@submit
                 if (offlineKorean != null) {
@@ -407,16 +412,19 @@ class MainActivity : Activity() {
                     var text = note + offlineKorean
                     if (local != null && pointer == null) {
                         // Each dictionary lists only the senses it has Korean words for (palm had just
-                        // the verb). Add words the Wiktionary translations know and, if a part of
-                        // speech of the English entry is still missing, the automatic dictionary's.
+                        // the verb, then only the hand senses). Add words the Wiktionary translations
+                        // know, then the automatic dictionary's top words for the English entry's main
+                        // part of speech and for any part of speech still missing.
                         val extras = MeaningMerge.extras(online.korean, null, text, 2).toMutableList()
                         if (extras.isNotEmpty()) supplementCredit = "보충 뜻: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)"
                         val missing = MeaningMerge.missingParts(MeaningMerge.combine(text, extras, emptyList()), online.parts)
-                        if (missing.isNotEmpty()) {
-                            val auto = autoMeaning(q, requestId)
-                            val more = auto?.let { MeaningMerge.extras(it.text, missing, text + " " + extras.joinToString(" "), 2) }.orEmpty()
-                            if (more.isNotEmpty()) { extras += more; supplementCredit = listOf(supplementCredit, MachineTranslation.CREDIT_SUPPLEMENT).filter { it.isNotBlank() }.joinToString("\n") }
-                        }
+                        val wanted = missing + listOfNotNull(online.parts.firstOrNull()?.let { MeaningMerge.koreanPart(it) })
+                        val auto = if (wanted.isEmpty()) null else try { autoFuture?.get(4, java.util.concurrent.TimeUnit.SECONDS) }
+                            catch (_: Exception) { autoFuture?.cancel(true); null }
+                        val more = auto?.let {
+                            MeaningMerge.extras(it.text, wanted, text + " " + extras.joinToString(" "), 2, maxWords = 2, topWords = 3)
+                        }.orEmpty()
+                        if (more.isNotEmpty()) { extras += more; supplementCredit = listOf(supplementCredit, MachineTranslation.CREDIT_SUPPLEMENT).filter { it.isNotBlank() }.joinToString("\n") }
                         text = MeaningMerge.combine(text, extras, online.parts)
                     }
                     text
@@ -437,7 +445,11 @@ class MainActivity : Activity() {
             // sentences are translated automatically.
             var machineExamples = false
             var missingTranslations = 0
-            val examples = if (humanExamples.isNotEmpty()) humanExampleText else {
+            // Re-pick with the final meaning list so the examples show its first senses.
+            val finalHuman = if (korean != null) ExampleSense.pick(exampleCandidates, korean) else humanExamples
+            val finalHumanText = finalHuman.joinToString("\n") { "${it.english}\t${it.korean}" }
+            val finalHumanCredit = if (finalHuman.isEmpty()) "" else finalHuman.joinToString("\n") { it.credit } + "\n문장 모음: ManyThings / Tatoeba"
+            val examples = if (finalHuman.isNotEmpty()) finalHumanText else {
                 val translated = translateSentences(online.examples, requestId)
                 online.examples.zip(translated).joinToString("\n") { (sentence, ko) ->
                     if (ko == null) missingTranslations++ else machineExamples = true
@@ -458,7 +470,7 @@ class MainActivity : Activity() {
                 english = english,
                 source = listOf(koreanCredit,
                     if (local?.english.isNullOrBlank()) "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)" else "",
-                    humanCredit.ifBlank { if (online.examples.isNotEmpty()) "영어 예문: FreeDictionaryAPI / Wiktionary" else "" },
+                    finalHumanCredit.ifBlank { if (online.examples.isNotEmpty()) "영어 예문: FreeDictionaryAPI / Wiktionary" else "" },
                     if (machineExamples) MachineTranslation.CREDIT_EXAMPLES else "")
                     .filter { it.isNotBlank() }.joinToString("\n"))
             // An entry with a missing example translation is not cached, so searching again retries.

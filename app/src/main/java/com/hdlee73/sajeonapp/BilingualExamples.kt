@@ -17,14 +17,15 @@ internal object UsageMatcher {
 
 internal class BilingualExamples(private val activity: Context) {
     private var database: SQLiteDatabase? = null
-    @Synchronized fun lookup(query: String): List<BilingualSentence> {
+    /** Up to [pool] sentences for the word, shortest first; ExampleSense picks the ones that fit the meanings. */
+    @Synchronized fun lookup(query: String, pool: Int = 30): List<BilingualSentence> {
         return try {
             val db = database ?: AssetDatabase.open(activity, "bilingual_examples.sqlite", "bilingual_examples")
                 ?.also { database = it } ?: return emptyList()
             val token = Regex("[a-z]+(?:'[a-z]+)?").find(query.lowercase(Locale.ROOT))?.value ?: return emptyList()
             val matches = mutableListOf<BilingualSentence>()
-            db.rawQuery("SELECT e.english,e.korean,e.credit FROM examples e JOIN tokens t ON t.example_id=e.id WHERE t.token=? AND length(e.english)>=18 ORDER BY length(e.english),e.id LIMIT 500", arrayOf(token)).use { c ->
-                while (c.moveToNext() && matches.size < 2) {
+            db.rawQuery("SELECT e.english,e.korean,e.credit FROM examples e JOIN tokens t ON t.example_id=e.id WHERE t.token=? AND length(e.english)>=18 ORDER BY length(e.english),e.id LIMIT 800", arrayOf(token)).use { c ->
+                while (c.moveToNext() && matches.size < pool) {
                     val en = c.getString(0)
                     if (SentenceExamples.isSentence(en) && UsageMatcher.contains(en, query) && matches.none { it.english == en }) {
                         matches += BilingualSentence(en, c.getString(1), c.getString(2))
