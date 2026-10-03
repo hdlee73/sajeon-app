@@ -122,12 +122,12 @@ def add_direct_dictionary(root, destination):
             # Direct English -> Korean senses lead; NIKL senses fill in what they lack.
             chosen, merged = merge_meanings(senses, old[0] if old else "")
             merged_count += merged
-            # English-Wiktionary translations fill what is still missing; one slot is always kept for them.
+            # English-Wiktionary translations only complete thin entries (fewer than four senses, at most
+            # two added): for well-covered words their rare senses ("one" = a one-dollar bill) are noise.
             extra = translations.get(word, [])
-            if extra:
-                kept = chosen[:FINAL_SENSES - 1] if len(chosen) >= FINAL_SENSES else chosen
-                grown = add_missing(kept, extra, " ".join(chosen), FINAL_SENSES)
-                if len(grown) > len(kept):
+            if extra and len(chosen) < 4:
+                grown = add_missing(chosen, extra, " ".join(chosen), min(FINAL_SENSES, len(chosen) + 2))
+                if len(grown) > len(chosen):
                     translated_count += 1
                     chosen, merged = grown, True
             chosen = chosen[:FINAL_SENSES]

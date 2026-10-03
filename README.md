@@ -64,8 +64,8 @@ The app still cannot tell which sense an example sentence uses; it lists the sen
 - **Pronunciation.** The IPA transcription from the online dictionary is shown under the word, saved with the word and shown in the saved list.
 - **Sorting saved words.** A sort button in the saved tab offers A→Z, Z→A, newest and oldest first. The choice is remembered and also used for the Excel export.
 
-## v1.6.8: another dictionary, five meanings (v1.6.6 and v1.6.7 had the translation draft)
-- **English Wiktionary translations.** The dictionary build now also reads the Korean translations the English Wiktionary lists per sense (rip off: 속이다 / 바가지를 씌우다 for "to cheat", 훔치다 for "to steal"). They are added to the Korean Wiktionary and NIKL senses only when the Korean word is new, and one of the five slots is always kept for them. If the download fails the build continues without it and prints a warning.
+## v1.6.9: another dictionary, five meanings (v1.6.6-v1.6.8 were drafts of it)
+- **English Wiktionary translations.** The dictionary build now also reads the Korean translations the English Wiktionary lists per sense (rip off: 속이다 / 바가지를 씌우다 for "to cheat", 훔치다 for "to steal"). They are added to the Korean Wiktionary and NIKL senses only when the Korean word is new, but only for thin entries (fewer than four senses, at most two added) so rare senses do not pad well-covered words. If the download fails the build continues without it and prints a warning.
 - **Five meanings.** Korean and English meaning lists show at most five senses (was six / four).
 - The automatic translation of English definitions tried in the first v1.6.6 draft was dropped; Naver's dictionary is not used (no public API, licensed content). The Naver 영한/영영 links stay on every result.
 - The Wiktionary / automatic-dictionary supplement also applies to redirected spellings (rip off → rip-off).
