@@ -80,13 +80,15 @@ def load_translations(root):
                     line = raw.decode("utf8", "replace")
                     if '"ko"' in line:
                         out.write(line)
-                if curl.wait() != 0:
+                print("::notice::English-Wiktionary dump read; curl exit", curl.wait())
+                if curl.returncode != 0:
                     raise RuntimeError("download failed: curl exit " + str(curl.returncode))
             temporary.replace(path)
         with path.open(encoding="utf8") as source:
             records = translation_records(source)
+        print("::notice::English-Wiktionary Korean translations: %d headwords, cache %d bytes" % (len(records), path.stat().st_size))
         assert len(records) > 5000, "Too few English-Wiktionary Korean translations: " + str(len(records))
         return records
     except Exception as error:  # the dictionary still builds from the other sources
-        print("WARNING: English-Wiktionary translations unavailable:", error)
+        print("::warning::English-Wiktionary translations unavailable:", error)
         return {}
