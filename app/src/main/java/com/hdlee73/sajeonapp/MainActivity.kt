@@ -101,7 +101,7 @@ class EntryDb(context: Context) : SQLiteOpenHelper(context, "sajeon.db", null, 3
     }
     fun save(original: WordEntry): Boolean {
         val e = original.studyVersion()
-        val v = ContentValues().apply { put("word", e.word); put("ipa", ""); put("korean", e.korean); put("english", e.english); put("examples", e.examples); put("source", e.source) }
+        val v = ContentValues().apply { put("word", e.word); put("ipa", e.ipa); put("korean", e.korean); put("english", e.english); put("examples", e.examples); put("source", e.source) }
         return writableDatabase.insertWithOnConflict("entries", null, v, SQLiteDatabase.CONFLICT_REPLACE) >= 0
     }
     fun updateExamples(before: WordEntry, after: WordEntry) {
@@ -159,6 +159,7 @@ class MainActivity : Activity() {
         dark = MaterialColors.getColor(this, com.google.android.material.R.attr.colorOnSurface, dark)
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
         db = EntryDb(this)
+        savedSort = SavedSort.of(getSharedPreferences("settings", MODE_PRIVATE).getString("savedSort", null))
         glossary = LocalGlossary(this)
         exampleCorpus = BilingualExamples(this)
         searchIo.execute { glossary.prewarm() }
@@ -283,7 +284,7 @@ class MainActivity : Activity() {
 
     private fun showPage() { updateTabs(); if (showSaved) renderSaved() else { resultBox.removeAllViews(); current?.let { showEntry(it, true) } } }
 
-    private data class OnlineResult(val english: String, val korean: String, val examples: List<String>, val allDefinitions: String, val parts: List<String>)
+    private data class OnlineResult(val english: String, val korean: String, val examples: List<String>, val allDefinitions: String, val parts: List<String>, val ipa: String = "")
 
     private fun lookup(q: String) {
         debounceHandler.removeCallbacks(debouncedSearch)
@@ -356,6 +357,13 @@ class MainActivity : Activity() {
                     // Complete offline entry: no network needed.
                     synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = initial }
                     present(initial, "검색 결과 · 기기 내 사전")
+                    // The bundled data has no pronunciation; add it when the online dictionary answers.
+                    val ipa = try { fetchDictionary(q).ipa } catch (_: Exception) { "" }
+                    if (ipa.isNotBlank() && !stale()) {
+                        val withIpa = initial.copy(ipa = ipa)
+                        synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = withIpa }
+                        present(withIpa, "검색 결과 · 기기 내 사전")
+                    }
                     return@submit
                 }
                 present(initial, "한글 뜻 표시됨 · 영어 풀이와 예문을 불러오는 중…", canSave = false)
@@ -475,7 +483,7 @@ class MainActivity : Activity() {
                 online.korean.isNotBlank() -> "한글 의미: Wiktionary 한국어 어휘 번역 (CC BY-SA 4.0)"
                 else -> ""
             }
-            val entry = WordEntry(word = q, ipa = "", examples = examples,
+            val entry = WordEntry(word = q, ipa = online.ipa, examples = examples,
                 korean = korean ?: "기기 내 사전과 온라인 사전에 한글 뜻풀이가 없습니다." +
                     (if (spelling.isNotEmpty()) " 철자를 확인하거나 아래 추천 단어를 눌러 보세요." else " 아래 네이버 사전에서 확인해 주세요."),
                 english = english,
@@ -595,7 +603,7 @@ class MainActivity : Activity() {
         val samples = allSenses.flatMap { sense ->
             val examples = sense.optJSONArray("examples") ?: JSONArray()
             (0 until examples.length()).mapNotNull { examples.optString(it).trim().takeIf(String::isNotBlank) }
-        }.filter { SentenceExamples.isSentence(it) }.distinct().take(3)
+        }.filter { SentenceExamples.isSimple(it) }.distinct().take(2)
         val korean = KoreanLexicalMeanings.format(allSenses.map { sense ->
             val translations = sense.optJSONArray("translations") ?: JSONArray()
             val words = (0 until translations.length()).mapNotNull { index ->
@@ -606,7 +614,11 @@ class MainActivity : Activity() {
             KoreanDictionarySense(sense.optString("_partOfSpeech"), words)
         })
         val parts = (0 until entries.length()).mapNotNull { entries.optJSONObject(it)?.optString("partOfSpeech")?.takeIf(String::isNotBlank) }.distinct()
-        return OnlineResult(numbered(allDefinitions.take(4)), korean, samples, allDefinitions.joinToString("\n"), parts)
+        val pronunciations = (0 until entries.length()).flatMap { i ->
+            val list = entries.optJSONObject(i)?.optJSONArray("pronunciations") ?: JSONArray()
+            (0 until list.length()).mapNotNull { j -> list.optJSONObject(j)?.takeIf { it.optString("type").equals("ipa", true) }?.optString("text") }
+        }
+        return OnlineResult(numbered(allDefinitions.take(4)), korean, samples, allDefinitions.joinToString("\n"), parts, Pronunciation.first(pronunciations))
     }
 
     private fun fetchLegacyDictionary(q: String): OnlineResult {
@@ -620,12 +632,14 @@ class MainActivity : Activity() {
             for (j in 0 until defs.length()) {
                 val item = defs.optJSONObject(j) ?: continue
                 item.optString("definition").takeIf(String::isNotBlank)?.let(definitions::add)
-                item.optString("example").takeIf { SentenceExamples.isSentence(it) }?.let(samples::add)
+                item.optString("example").takeIf { SentenceExamples.isSimple(it) }?.let(samples::add)
             }
         }
         if (definitions.isEmpty()) throw IllegalStateException("정의를 찾지 못했습니다")
         val parts = (0 until meanings.length()).mapNotNull { meanings.optJSONObject(it)?.optString("partOfSpeech")?.takeIf(String::isNotBlank) }.distinct()
-        return OnlineResult(numbered(definitions.take(4)), "", samples.take(3), definitions.joinToString("\n"), parts)
+        val phonetics = json.optJSONArray("phonetics") ?: JSONArray()
+        val ipa = Pronunciation.first(listOf(json.optString("phonetic")) + (0 until phonetics.length()).map { phonetics.optJSONObject(it)?.optString("text") })
+        return OnlineResult(numbered(definitions.take(4)), "", samples.take(2), definitions.joinToString("\n"), parts, ipa)
     }
 
     private fun numbered(lines: List<String>) = lines.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
@@ -644,7 +658,10 @@ class MainActivity : Activity() {
         val e = original.studyVersion()
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(18.dp(), 18.dp(), 18.dp(), 18.dp()); background = rounded(0xffffffff.toInt(), 18) }
         val wordRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        wordRow.addView(label(e.word, 25, true, dark), LinearLayout.LayoutParams(0, -2, 1f))
+        val wordColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        wordColumn.addView(label(e.word, 25, true, dark))
+        if (e.ipa.isNotBlank()) wordColumn.addView(label(e.ipa, 15, false, 0xff526174.toInt()))
+        wordRow.addView(wordColumn, LinearLayout.LayoutParams(0, -2, 1f))
         wordRow.addView(button("🔊 듣기", 0xffeee9f7.toInt(), 0xff655880.toInt()).apply {
             textSize = 12f
             setOnClickListener { speak(e.word) }
@@ -710,17 +727,32 @@ class MainActivity : Activity() {
         if (!showSaved) return
         updateTabs()
         resultBox.removeAllViews()
-        val entries = db.all().map { it.studyVersion() }
+        val entries = sortedSaved().map { it.studyVersion() }
         if (entries.isEmpty()) { resultBox.addView(label("아직 저장한 단어가 없습니다. 검색 결과에서 원하는 단어만 저장할 수 있어요.", 15, false, 0xff5d6877.toInt()).apply { setPadding(4.dp(), 14.dp(), 4.dp(), 14.dp()) }); return }
-        resultBox.addView(button("↗ 엑셀 내보내기", 0xffdff0e7.toInt(), 0xff386752.toInt()).apply { setOnClickListener { createXlsx() } }, LinearLayout.LayoutParams(-1, 48.dp()).apply { bottomMargin = 12.dp() })
+        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        tools.addView(button("정렬: " + savedSort.title.substringBefore(" ("), 0xffdce8f2.toInt(), blue).apply {
+            textSize = 13f
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity).setTitle("저장 단어 정렬")
+                    .setSingleChoiceItems(SavedSort.values().map { it.title }.toTypedArray(), savedSort.ordinal) { dialog, which ->
+                        savedSort = SavedSort.values()[which]
+                        getSharedPreferences("settings", MODE_PRIVATE).edit().putString("savedSort", savedSort.name).apply()
+                        dialog.dismiss()
+                        renderSaved()
+                    }.setNegativeButton("취소", null).show()
+            }
+        }, LinearLayout.LayoutParams(0, 48.dp(), 1f).apply { rightMargin = 6.dp() })
+        tools.addView(button("↗ 엑셀 내보내기", 0xffdff0e7.toInt(), 0xff386752.toInt()).apply { textSize = 13f; setOnClickListener { createXlsx() } },
+            LinearLayout.LayoutParams(0, 48.dp(), 1f))
+        resultBox.addView(tools, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = 12.dp() })
         entries.forEach { e ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(14.dp(), 12.dp(), 8.dp(), 12.dp()); background = rounded(0xffffffff.toInt(), 14) }
             val info = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            info.addView(label(e.word, 18, true, dark))
+            info.addView(label(e.word + (if (e.ipa.isBlank()) "" else "  " + e.ipa), 18, true, dark))
             info.addView(label(e.korean, 14, false, 0xff526174.toInt()).apply { maxLines = 2 })
             row.addView(info, LinearLayout.LayoutParams(0, -2, 1f))
             val openEntry = {
-                AlertDialog.Builder(this@MainActivity).setTitle(e.word)
+                AlertDialog.Builder(this@MainActivity).setTitle(e.word + (if (e.ipa.isBlank()) "" else "  " + e.ipa))
                     .setMessage("한글 의미\n" + e.korean + (if (e.english.isBlank()) "" else "\n\nEnglish definition\n" + e.english) +
                         displayExamples(e.examples).let { if (it.isBlank()) "" else "\n\n예문\n$it" })
                     .setNeutralButton("🔊 듣기") { _, _ -> speak(e.word) }
@@ -749,8 +781,11 @@ class MainActivity : Activity() {
         }
     }
 
+    private var savedSort = SavedSort.ALPHABETICAL
+    private fun sortedSaved(): List<WordEntry> = savedSort.apply(db.all(), { it.word }, { it.id })
+
     private fun createXlsx() {
-        val entries = db.all()
+        val entries = sortedSaved()
         if (entries.isEmpty()) { toast("내보낼 저장 단어가 없습니다"); return }
         val choices = arrayOf("단어·뜻·영어 예문(한글 해석 병기)", "한글 예문 해석 + 영어 예문", "영어 예문만")
         AlertDialog.Builder(this).setTitle("내보내기 형식").setItems(choices) { _, which ->

@@ -15,7 +15,9 @@ class ExportWorker(appContext: Context, params: WorkerParameters) : CoroutineWor
         val uriText = inputData.getString(KEY_URI) ?: return@withContext Result.failure()
         val format = inputData.getInt(KEY_FORMAT, 1)
         try {
-            val bytes = ExportWorkbook.make(EntryDb(applicationContext).all(), format)
+            val bytes = ExportWorkbook.make(
+                SavedSort.of(applicationContext.getSharedPreferences("settings", Context.MODE_PRIVATE).getString("savedSort", null))
+                    .apply(EntryDb(applicationContext).all(), { it.word }, { it.id }), format)
             applicationContext.contentResolver.openOutputStream(Uri.parse(uriText))?.use { it.write(bytes) }
                 ?: return@withContext Result.retry()
             notifyComplete("단어장 파일을 저장했습니다.")

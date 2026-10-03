@@ -58,3 +58,8 @@ The app still cannot tell which sense an example sentence uses; it lists the sen
 
 ## v1.6.4: meanings follow the example's sense
 - When a shown example uses a compound the dictionary knows (Tom is planting a palm **tree** → `palm tree` = 야자나무) and the Korean word appears in the example's translation, that sense is added to the meaning list, so the list and the example always agree.
+
+## v1.6.5: simpler examples, pronunciation, sorting saved words
+- **Simple examples.** Online example sentences must now be a single plain line (3–16 words, ≤90 characters) without bracketed quotation fragments, verse slashes, old letters or archaic words, so old-book quotations no longer show up. Corpus sentences use the same rule.
+- **Pronunciation.** The IPA transcription from the online dictionary is shown under the word, saved with the word and shown in the saved list.
+- **Sorting saved words.** A sort button in the saved tab offers A→Z, Z→A, newest and oldest first. The choice is remembered and also used for the Excel export.

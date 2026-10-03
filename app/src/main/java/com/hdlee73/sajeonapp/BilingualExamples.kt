@@ -27,7 +27,7 @@ internal class BilingualExamples(private val activity: Context) {
             db.rawQuery("SELECT e.english,e.korean,e.credit FROM examples e JOIN tokens t ON t.example_id=e.id WHERE t.token=? AND length(e.english)>=18 ORDER BY length(e.english),e.id LIMIT 800", arrayOf(token)).use { c ->
                 while (c.moveToNext() && matches.size < pool) {
                     val en = c.getString(0)
-                    if (SentenceExamples.isSentence(en) && UsageMatcher.contains(en, query) && matches.none { it.english == en }) {
+                    if (SentenceExamples.isSimple(en) && UsageMatcher.contains(en, query) && matches.none { it.english == en }) {
                         matches += BilingualSentence(en, c.getString(1), c.getString(2))
                     }
                 }
