@@ -2,7 +2,7 @@ package com.hdlee73.sajeonapp
 
 /** Keep dictionary sense order; synonyms within one sense stay together. */
 internal object StudyMeanings {
-    const val MAX_SENSES = 6
+    const val MAX_SENSES = 5
     fun limit(text: String): String {
         val out = mutableListOf<String>()
         var senses = 0

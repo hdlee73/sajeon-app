@@ -458,17 +458,7 @@ class MainActivity : Activity() {
                 }
             }
             val spelling = if (korean == null) (glossary.spellingCandidates(q) + phraseCandidates).distinct().take(5) else emptyList()
-            val englishPlain = local?.english?.ifBlank { null } ?: online.english
-            // Every English definition gets its Korean translation, so a sense the word lists lack
-            // (rip off = cheat, steal) is still explained in Korean.
-            val definitionLines = englishPlain.lines().filter { it.isNotBlank() }
-            val definitionSources = definitionLines.take(4).map { it.replace(Regex("^\\s*\\d+[.)]\\s*"), "").trim() }
-            val definitionKorean = if (definitionSources.isEmpty()) emptyList() else translateSentences(definitionSources, requestId)
-            if (stale()) return@submit
-            val translatedDefinitions = definitionKorean.any { it != null }
-            val english = if (!translatedDefinitions) englishPlain else definitionLines.mapIndexed { i, line ->
-                definitionKorean.getOrNull(i)?.let { "$line\n   ▸ $it" } ?: line
-            }.joinToString("\n")
+            val english = local?.english?.ifBlank { null } ?: online.english
 
             // Every example gets a Korean line: corpus pairs are human translations, online English
             // sentences are translated automatically.
@@ -500,15 +490,14 @@ class MainActivity : Activity() {
                 source = listOf(koreanCredit,
                     if (local?.english.isNullOrBlank()) "영영 풀이: FreeDictionaryAPI / Wiktionary (CC BY-SA 4.0)" else "",
                     finalHumanCredit.ifBlank { if (online.examples.isNotEmpty()) "영어 예문: FreeDictionaryAPI / Wiktionary" else "" },
-                    if (machineExamples) MachineTranslation.CREDIT_EXAMPLES else "",
-                    if (translatedDefinitions) MachineTranslation.CREDIT_DEFINITIONS else "")
+                    if (machineExamples) MachineTranslation.CREDIT_EXAMPLES else "")
                     .filter { it.isNotBlank() }.joinToString("\n"))
             // An entry with a missing example translation is not cached, so searching again retries.
             if (korean != null && missingTranslations == 0) synchronized(resultCache) { resultCache[q.lowercase(Locale.ROOT)] = entry }
             present(entry, when {
                 korean == null -> "한글 뜻풀이를 찾지 못했습니다"
                 missingTranslations > 0 -> "검색 결과 · 예문 해석을 불러오지 못했습니다. 다시 검색하면 해석이 추가됩니다."
-                usedAutoMeaning || machineExamples || translatedDefinitions || supplementCredit.contains("자동 번역") -> "검색 결과 · 일부 자동 번역 포함"
+                usedAutoMeaning || machineExamples || supplementCredit.contains("자동 번역") -> "검색 결과 · 일부 자동 번역 포함"
                 else -> "검색 결과"
             }, canSave = korean != null, suggestions = spelling)
         }
@@ -629,7 +618,7 @@ class MainActivity : Activity() {
             val list = entries.optJSONObject(i)?.optJSONArray("pronunciations") ?: JSONArray()
             (0 until list.length()).mapNotNull { j -> list.optJSONObject(j)?.takeIf { it.optString("type").equals("ipa", true) }?.optString("text") }
         }
-        return OnlineResult(numbered(allDefinitions.take(4)), korean, samples, allDefinitions.joinToString("\n"), parts, Pronunciation.first(pronunciations))
+        return OnlineResult(numbered(allDefinitions.take(StudyMeanings.MAX_SENSES)), korean, samples, allDefinitions.joinToString("\n"), parts, Pronunciation.first(pronunciations))
     }
 
     private fun fetchLegacyDictionary(q: String): OnlineResult {
@@ -650,7 +639,7 @@ class MainActivity : Activity() {
         val parts = (0 until meanings.length()).mapNotNull { meanings.optJSONObject(it)?.optString("partOfSpeech")?.takeIf(String::isNotBlank) }.distinct()
         val phonetics = json.optJSONArray("phonetics") ?: JSONArray()
         val ipa = Pronunciation.first(listOf(json.optString("phonetic")) + (0 until phonetics.length()).map { phonetics.optJSONObject(it)?.optString("text") })
-        return OnlineResult(numbered(definitions.take(4)), "", samples.take(2), definitions.joinToString("\n"), parts, ipa)
+        return OnlineResult(numbered(definitions.take(StudyMeanings.MAX_SENSES)), "", samples.take(2), definitions.joinToString("\n"), parts, ipa)
     }
 
     private fun numbered(lines: List<String>) = lines.mapIndexed { i, d -> "${i + 1}. $d" }.joinToString("\n")
@@ -702,7 +691,7 @@ class MainActivity : Activity() {
         dictionaryLinks.addView(label(" · ", 12, false, 0xff64748b.toInt()))
         addDictionaryLink("영영", "https://dict.naver.com/enendict/#/search?query=")
         card.addView(dictionaryLinks)
-        if (e.english.isNotBlank()) section(card, if (e.english.contains("▸")) "English definition · 한국어 번역" else "English definition", e.english)
+        if (e.english.isNotBlank()) section(card, "English definition", e.english)
         val pairs = examplePairs(e.examples)
         if (pairs.isNotEmpty()) {
             section(card, if (pairs.any { it.second.isNotBlank() }) "예문 · 한국어 해석" else "영어 예문", displayExamples(e.examples))

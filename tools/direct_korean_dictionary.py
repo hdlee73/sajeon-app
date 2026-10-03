@@ -4,8 +4,10 @@ import re
 import sqlite3
 import subprocess
 from pathlib import Path
+from english_wiktionary_translations import add_missing, load_translations
 
 URL = "https://kaikki.org/kowiktionary/%EC%98%81%EC%96%B4/kaikki.org-dictionary-%EC%98%81%EC%96%B4.jsonl"
+FINAL_SENSES = 5
 POS = {"noun": "명사", "verb": "동사", "adj": "형용사", "adv": "부사", "prep": "전치사",
        "conj": "접속사", "pron": "대명사", "article": "관사", "det": "한정사",
        "intj": "감탄사", "phrase": "숙어", "num": "수사", "name": "고유명사",
@@ -100,6 +102,7 @@ def add_direct_dictionary(root, destination):
     else:
         with path.open(encoding="utf8") as source:
             records = direct_records(source)
+    translations = load_translations(root)
     assert len(records) > 10000, "Incomplete Korean-Wiktionary English data"
     assert "preliminary" in records and any("예비" in g for g in records["preliminary"])
     expected = ("initial", "important", "ordinary", "simple", "prepare", "eat", "go",
@@ -109,13 +112,25 @@ def add_direct_dictionary(root, destination):
     assert all(word in records for word in expected), "Missing ordinary English headword"
     with sqlite3.connect(destination) as db:
         db.execute("ALTER TABLE words ADD COLUMN source TEXT DEFAULT 'NIKL'")
-        new = merged_count = 0
+        new = merged_count = translated_count = 0
+        # Headwords that only the English Wiktionary translates are added too.
+        for word in translations:
+            records.setdefault(word, [])
         for word, senses in records.items():
             old = db.execute("SELECT meaning_ko FROM words WHERE word=?", (word,)).fetchone()
             new += old is None
             # Direct English -> Korean senses lead; NIKL senses fill in what they lack.
             chosen, merged = merge_meanings(senses, old[0] if old else "")
             merged_count += merged
+            # English-Wiktionary translations fill what is still missing; one slot is always kept for them.
+            extra = translations.get(word, [])
+            if extra:
+                kept = chosen[:FINAL_SENSES - 1] if len(chosen) >= FINAL_SENSES else chosen
+                grown = add_missing(kept, extra, " ".join(chosen), FINAL_SENSES)
+                if len(grown) > len(kept):
+                    translated_count += 1
+                    chosen, merged = grown, True
+            chosen = chosen[:FINAL_SENSES]
             korean = "\n".join(str(i + 1) + ". " + s for i, s in enumerate(chosen))
             db.execute("INSERT OR REPLACE INTO words(word,meaning_ko,meaning_en,ipa,source) VALUES(?,?,'','',?)",
                        (word, korean, "MERGED" if merged else "KOWIKTIONARY"))
@@ -127,4 +142,4 @@ def add_direct_dictionary(root, destination):
         indexed = db.execute("SELECT count(*) FROM words_fts").fetchone()[0]
         assert indexed == total, "Incomplete FTS phrase index"
     print("Direct Korean-Wiktionary headwords:", len(records), "new headwords:", new,
-          "merged with NIKL:", merged_count, "total:", total)
+          "merged with NIKL:", merged_count, "with English-Wiktionary translations:", translated_count, "total:", total)

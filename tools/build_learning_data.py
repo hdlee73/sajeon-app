@@ -21,7 +21,7 @@ FILES = [f'{i}_5000_20240101.json' for i in range(1, 11)] + ['11_1960_20240101.j
 # NIKL marks headwords learners meet early; the source files are sorted by Korean spelling, so
 # cutting at the first few senses would keep ㄱ-words and drop common ones (달리다 for "run").
 LEVEL_RANK = {'초급': 0, '중급': 1, '고급': 2}
-MAX_NIKL_SENSES = 6
+MAX_NIKL_SENSES = 5
 
 def as_list(value):
     return value if isinstance(value, list) else [value] if value else []

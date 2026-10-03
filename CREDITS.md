@@ -13,3 +13,5 @@ Online data:
 - Spelling suggestions when nothing is found: [Datamuse API](https://www.datamuse.com/api/).
 
 Korean meanings are never machine-translated. Full details: `app/src/main/assets/DATA_SOURCES.txt`.
+
+- English Wiktionary Korean translations (via Kaikki.org English dump), CC BY-SA 4.0 — https://en.wiktionary.org
