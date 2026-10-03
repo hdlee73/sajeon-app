@@ -111,6 +111,7 @@ internal data class MachineMeaning(val text: String, val fromDictionary: Boolean
 internal object MachineTranslation {
     const val CREDIT_MEANING = "한글 의미: 구글 번역 사전 (자동 번역)"
     const val CREDIT_SUPPLEMENT = "보충 뜻: 구글 번역 사전 (자동 번역)"
+    const val CREDIT_DEFINITIONS = "영어 풀이 번역: 구글 번역 (자동 번역)"
     const val CREDIT_EXAMPLES = "예문 해석: 구글 번역 (자동 번역)"
 
     private val parts = mapOf("noun" to "명사", "verb" to "동사", "adjective" to "형용사", "adverb" to "부사",

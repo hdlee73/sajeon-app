@@ -63,3 +63,8 @@ The app still cannot tell which sense an example sentence uses; it lists the sen
 - **Simple examples.** Online example sentences must now be a single plain line (3–16 words, ≤90 characters) without bracketed quotation fragments, verse slashes, old letters or archaic words, so old-book quotations no longer show up. Corpus sentences use the same rule.
 - **Pronunciation.** The IPA transcription from the online dictionary is shown under the word, saved with the word and shown in the saved list.
 - **Sorting saved words.** A sort button in the saved tab offers A→Z, Z→A, newest and oldest first. The choice is remembered and also used for the Excel export.
+
+## v1.6.6: Korean explanation for every English definition
+- Naver's dictionary cannot be used inside the app: it has no public dictionary API, its content is licensed to Naver, and scraping it would violate its terms. The Naver 영한/영영 links on every result stay for checking.
+- Every English definition (up to four) is now followed by its Korean translation (automatic, labeled), so senses missing from the word lists (rip off = cheat, steal) are still explained in Korean.
+- The Wiktionary / automatic-dictionary supplement now also applies to redirected spellings and variants (rip off → rip-off).
