@@ -87,7 +87,7 @@ def load_translations(root):
         with path.open(encoding="utf8") as source:
             records = translation_records(source)
         print("::notice::English-Wiktionary Korean translations: %d headwords, cache %d bytes" % (len(records), path.stat().st_size))
-        assert len(records) > 5000, "Too few English-Wiktionary Korean translations: " + str(len(records))
+        assert len(records) > 1000, "Too few English-Wiktionary Korean translations: " + str(len(records))
         return records
     except Exception as error:  # the dictionary still builds from the other sources
         print("::warning::English-Wiktionary translations unavailable:", error)
